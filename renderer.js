@@ -233,18 +233,21 @@ ipcRenderer.on('open-file-path', (_e, file) => {
 
 // --- Settings ---
 
-const defaults = { font: "serif", fontSize: 16, padding: 50 };
+const defaults = { font: "serif", fontSize: 16, padding: 50, spacing: 100 };
 const settings = { ...defaults, ...JSON.parse(localStorage.getItem('md-settings') || '{}') };
 
 function applySettings() {
   document.documentElement.style.setProperty('--md-font', settings.font);
   document.documentElement.style.setProperty('--md-font-size', settings.fontSize + 'px');
   document.documentElement.style.setProperty('--content-padding', settings.padding + 'px');
+  document.documentElement.style.setProperty('--md-spacing', settings.spacing / 100);
   $('#setting-font').value = settings.font;
   $('#setting-font-size').value = settings.fontSize;
   $('#setting-padding').value = settings.padding;
+  $('#setting-spacing').value = settings.spacing;
   $('#font-size-val').textContent = settings.fontSize + 'px';
   $('#padding-val').textContent = settings.padding + 'px';
+  $('#spacing-val').textContent = settings.spacing + '%';
   localStorage.setItem('md-settings', JSON.stringify(settings));
 }
 
@@ -260,6 +263,7 @@ document.addEventListener('click', (e) => {
 $('#setting-font').addEventListener('change', (e) => { settings.font = e.target.value; applySettings(); });
 $('#setting-font-size').addEventListener('input', (e) => { settings.fontSize = +e.target.value; applySettings(); });
 $('#setting-padding').addEventListener('input', (e) => { settings.padding = +e.target.value; applySettings(); });
+$('#setting-spacing').addEventListener('input', (e) => { settings.spacing = +e.target.value; applySettings(); });
 
 applySettings();
 

@@ -221,7 +221,7 @@ body {
 .markdown-body h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
 .markdown-body h3 { font-size: 1.25em; }
 
-.markdown-body p { margin: 0.8em 0; }
+.markdown-body p { margin: calc(var(--md-spacing, 1) * 1em) 0; }
 .markdown-body a { color: var(--accent); text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
 
@@ -255,9 +255,9 @@ body {
   font-size: 0.875em;
 }
 
-.markdown-body ul, .markdown-body ol { padding-left: 2em; margin: 0.5em 0; }
-.markdown-body li { margin: 0.3em 0; }
-.markdown-body li > ul, .markdown-body li > ol { margin: 0.1em 0; }
+.markdown-body ul, .markdown-body ol { padding-left: 2em; margin: calc(var(--md-spacing, 1) * 0.8em) 0; }
+.markdown-body li { margin: calc(var(--md-spacing, 1) * 0.4em) 0; }
+.markdown-body li > ul, .markdown-body li > ol { margin: calc(var(--md-spacing, 1) * 0.15em) 0; }
 
 .markdown-body table {
   border-collapse: collapse;
