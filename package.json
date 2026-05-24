@@ -1,0 +1,13 @@
+{
+  "name": "moth",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^28.0.0",
+    "marked": "^12.0.0",
+    "highlight.js": "^11.9.0"
+  }
+}

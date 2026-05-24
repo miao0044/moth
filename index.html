@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Moth</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="node_modules/highlight.js/styles/github-dark.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&family=Lexend:wght@300;400;500;600;700&display=swap">
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div id="sidebar-header">
+        <button id="btn-open-folder" title="Open Folder">📁</button>
+        <button id="btn-open-file" title="Open File">📄</button>
+        <span id="folder-name">No folder open</span>
+      </div>
+      <div id="file-tree"></div>
+    </div>
+    <div id="sidebar-resize"></div>
+    <div id="main">
+      <div id="tab-bar">
+        <button id="btn-toggle-sidebar" title="Toggle Sidebar (Ctrl+B)">☰</button>
+        <div id="tabs"></div>
+        <button id="btn-settings" title="Settings">⚙</button>
+      </div>
+      <div id="settings-panel">
+        <h3>Settings</h3>
+        <div class="setting-row">
+          <label>Font</label>
+          <select id="setting-font">
+            <option value="serif">Serif</option>
+            <option value="Georgia, serif">Georgia</option>
+            <option value="Garamond, 'EB Garamond', serif">Garamond</option>
+            <option value="Lexend, sans-serif">Lexend</option>
+            <option value="'Atkinson Hyperlegible', sans-serif">Atkinson Hyperlegible</option>
+            <option value="'Segoe UI', sans-serif">Segoe UI</option>
+            <option value="Consolas, 'Courier New', monospace">Consolas (Mono)</option>
+            <option value="'Times New Roman', serif">Times New Roman</option>
+            <option value="Calibri, sans-serif">Calibri</option>
+            <option value="Arial, sans-serif">Arial</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>Size</label>
+          <input type="range" id="setting-font-size" min="12" max="24" value="16">
+          <span class="range-val" id="font-size-val">16px</span>
+        </div>
+        <div class="setting-row">
+          <label>Padding</label>
+          <input type="range" id="setting-padding" min="20" max="300" value="50">
+          <span class="range-val" id="padding-val">50px</span>
+        </div>
+      </div>
+      <div id="content">
+        <div id="welcome">
+          <h2>Moth</h2>
+          <p>Open a folder or file to get started.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="status-bar">
+    <span id="status-path"></span>
+    <span id="status-stats"></span>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
