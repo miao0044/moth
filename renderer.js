@@ -1,15 +1,6 @@
 const { ipcRenderer } = require('electron');
-const { marked } = require('marked');
-const hljs = require('highlight.js');
 const path = require('path');
-
-marked.setOptions({
-  highlight: (code, lang) => {
-    if (lang && hljs.getLanguage(lang)) return hljs.highlight(code, { language: lang }).value;
-    return hljs.highlightAuto(code).value;
-  },
-  breaks: true
-});
+const { createEditorView, destroyEditorView, openSearch } = require('./dist/editor.bundle');
 
 const state = {
   tabs: [],
@@ -104,7 +95,10 @@ async function openFile(filePath) {
     id: Date.now().toString(),
     path: filePath,
     name: path.basename(filePath),
-    content
+    content,
+    savedContent: content,
+    dirty: false,
+    editorView: null
   };
   state.tabs.push(tab);
   renderTabs();
@@ -112,6 +106,12 @@ async function openFile(filePath) {
 }
 
 function activateTab(id) {
+  // Detach previous editor
+  const prevTab = state.tabs.find(t => t.id === state.activeTab);
+  if (prevTab && prevTab.editorView) {
+    prevTab.editorView.dom.remove();
+  }
+
   state.activeTab = id;
   const tab = state.tabs.find(t => t.id === id);
 
@@ -123,15 +123,19 @@ function activateTab(id) {
   if (tab) {
     renderContent(tab);
     $statusPath.textContent = tab.path;
-    const words = tab.content.trim().split(/\s+/).filter(Boolean).length;
-    const chars = tab.content.length;
-    $statusStats.textContent = `${words} words · ${chars} characters`;
+    updateStatusBar(tab);
   }
 }
 
 function closeTab(id) {
   const idx = state.tabs.findIndex(t => t.id === id);
   if (idx === -1) return;
+
+  const tab = state.tabs[idx];
+  if (tab.editorView) {
+    destroyEditorView(tab.editorView);
+    tab.editorView = null;
+  }
   state.tabs.splice(idx, 1);
 
   if (state.activeTab === id) {
@@ -156,7 +160,7 @@ function renderTabs() {
 
     const title = document.createElement('span');
     title.className = 'tab-title';
-    title.textContent = tab.name;
+    title.textContent = (tab.dirty ? '● ' : '') + tab.name;
 
     const close = document.createElement('span');
     close.className = 'tab-close';
@@ -170,23 +174,49 @@ function renderTabs() {
   }
 }
 
-// --- Render Markdown ---
+// --- Editor ---
 
 function renderContent(tab) {
-  const ext = path.extname(tab.path).toLowerCase();
-  if (ext === '.md' || ext === '.markdown') {
-    $content.innerHTML = `<div class="markdown-body">${marked.parse(tab.content)}</div>`;
+  $content.innerHTML = '';
+
+  if (!tab.editorView) {
+    tab.editorView = createEditorView($content, tab.content, {
+      onChange: (newContent) => {
+        tab.content = newContent;
+        tab.dirty = (newContent !== tab.savedContent);
+        renderTabs();
+        updateStatusBar(tab);
+      }
+    });
   } else {
-    $content.innerHTML = `<div class="markdown-body"><pre><code>${escapeHtml(tab.content)}</code></pre></div>`;
+    $content.appendChild(tab.editorView.dom);
+    tab.editorView.requestMeasure();
   }
-  $content.scrollTop = 0;
 }
 
-function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function updateStatusBar(tab) {
+  const words = tab.content.trim().split(/\s+/).filter(Boolean).length;
+  const chars = tab.content.length;
+  $statusStats.textContent = `${words} words · ${chars} characters`;
+}
+
+async function saveActiveTab() {
+  const tab = state.tabs.find(t => t.id === state.activeTab);
+  if (!tab || !tab.dirty) return;
+  const success = await ipcRenderer.invoke('write-file', tab.path, tab.content);
+  if (success) {
+    tab.dirty = false;
+    tab.savedContent = tab.content;
+    renderTabs();
+  }
 }
 
 // --- Events ---
+
+$('#btn-search').addEventListener('click', () => {
+  const tab = state.tabs.find(t => t.id === state.activeTab);
+  if (tab && tab.editorView) openSearch(tab.editorView);
+});
 
 $('#btn-open-folder').addEventListener('click', async () => {
   const dir = await ipcRenderer.invoke('open-folder');
@@ -249,6 +279,10 @@ function applySettings() {
   $('#padding-val').textContent = settings.padding + 'px';
   $('#spacing-val').textContent = settings.spacing + '%';
   localStorage.setItem('md-settings', JSON.stringify(settings));
+
+  // Trigger CM6 re-measure when settings change
+  const tab = state.tabs.find(t => t.id === state.activeTab);
+  if (tab && tab.editorView) tab.editorView.requestMeasure();
 }
 
 $('#btn-settings').addEventListener('click', (e) => {
@@ -272,6 +306,10 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key === 'o') {
     e.preventDefault();
     $('#btn-open-file').click();
+  }
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    saveActiveTab();
   }
   if (e.ctrlKey && e.key === 'w') {
     e.preventDefault();
