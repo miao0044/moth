@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 nativeTheme.themeSource = 'dark';
+app.disableHardwareAcceleration();
 
 const FILE_EXTS = ['.md', '.markdown', '.txt'];
 
@@ -34,12 +35,14 @@ if (!gotLock) {
       height: 800,
       minWidth: 600,
       minHeight: 400,
+      show: false,
       backgroundColor: '#262626',
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false
       }
     });
+    ipcMain.once('renderer-ready', () => mainWindow.show());
     mainWindow.loadFile('index.html');
     mainWindow.setMenuBarVisibility(false);
   }
@@ -63,6 +66,24 @@ if (!gotLock) {
     });
     if (result.canceled) return null;
     return result.filePaths[0];
+  });
+
+  ipcMain.handle('save-file-dialog', async (_, defaultName) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: defaultName,
+      filters: [
+        { name: 'Markdown', extensions: ['md', 'markdown'] },
+        { name: 'Text', extensions: ['txt'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled) return null;
+    return result.filePath;
+  });
+
+  ipcMain.handle('rename-file', (_, oldPath, newPath) => {
+    try { fs.renameSync(oldPath, newPath); return true; }
+    catch { return false; }
   });
 
   ipcMain.handle('read-dir', (_, dirPath) => {

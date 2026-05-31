@@ -1,5 +1,6 @@
 node_modules/
 dist/
+release/
 CLAUDE.md
 cc.ps1
 test.md

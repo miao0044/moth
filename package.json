@@ -4,17 +4,59 @@
   "main": "main.js",
   "scripts": {
     "build": "node esbuild.config.mjs",
-    "start": "node esbuild.config.mjs && electron ."
+    "start": "node esbuild.config.mjs && electron .",
+    "dist": "node esbuild.config.mjs && electron-builder --win"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
     "codemirror": "^6.0.2",
     "electron": "^28.0.0",
-    "highlight.js": "^11.9.0",
-    "marked": "^12.0.0"
-  },
-  "devDependencies": {
+    "electron-builder": "^26.0.0",
     "esbuild": "^0.28.0"
+  },
+  "build": {
+    "appId": "com.moth.editor",
+    "productName": "Moth",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "renderer.js",
+      "index.html",
+      "style.css",
+      "dist/**/*",
+      "!dist/*.map"
+    ],
+    "win": {
+      "target": "dir"
+    },
+    "fileAssociations": [
+      {
+        "ext": "txt",
+        "name": "Text File",
+        "description": "Text File",
+        "role": "Editor"
+      },
+      {
+        "ext": "md",
+        "name": "Markdown File",
+        "description": "Markdown File",
+        "role": "Editor"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown File",
+        "description": "Markdown File",
+        "role": "Editor"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

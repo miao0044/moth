@@ -67,8 +67,73 @@ async function renderTree(dirPath, container, depth) {
     } else {
       row.style.color = '#555';
     }
+
+    if (!entry.isDir) {
+      row.addEventListener('contextmenu', async (e) => {
+        e.preventDefault();
+        const nameSpan = row.querySelector('.name');
+        if (!nameSpan) return;
+        const input = await renameFile(entry.path, entry.name, (result) => {
+          if (result) {
+            const tab = state.tabs.find(t => t.path === entry.path);
+            if (tab) {
+              tab.path = result.newPath;
+              tab.name = result.newName;
+              renderTabs();
+              if (tab.id === state.activeTab) $statusPath.textContent = result.newPath;
+            }
+            entry.path = result.newPath;
+            entry.name = result.newName;
+            entry.ext = path.extname(result.newName).toLowerCase();
+            row.dataset.path = result.newPath;
+            const icon = row.querySelector('.icon');
+            if (icon) icon.textContent = fileIcon(entry.ext);
+          }
+          const span = document.createElement('span');
+          span.className = 'name';
+          span.textContent = entry.name;
+          const existing = row.querySelector('.rename-input');
+          if (existing) existing.replaceWith(span);
+        });
+        nameSpan.replaceWith(input);
+      });
+    }
     container.appendChild(item);
   }
+}
+
+async function renameFile(oldPath, oldName, onDone) {
+  const input = document.createElement('input');
+  input.className = 'rename-input';
+  input.value = oldName;
+
+  const dotIdx = oldName.lastIndexOf('.');
+  requestAnimationFrame(() => {
+    input.focus();
+    if (dotIdx > 0) input.setSelectionRange(0, dotIdx);
+    else input.select();
+  });
+
+  let committed = false;
+  async function commit() {
+    if (committed) return;
+    committed = true;
+    const newName = input.value.trim();
+    if (!newName || newName === oldName) { onDone(null); return; }
+    const dir = path.dirname(oldPath);
+    const newPath = path.join(dir, newName);
+    const ok = await ipcRenderer.invoke('rename-file', oldPath, newPath);
+    if (ok) onDone({ newPath, newName });
+    else onDone(null);
+  }
+
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { committed = true; onDone(null); }
+  });
+  input.addEventListener('blur', () => commit());
+  return input;
 }
 
 function fileIcon(ext) {
@@ -170,6 +235,30 @@ function renderTabs() {
     el.appendChild(title);
     el.appendChild(close);
     el.addEventListener('click', () => activateTab(tab.id));
+
+    el.addEventListener('contextmenu', async (e) => {
+      e.preventDefault();
+      if (!tab.path) return;
+      const input = await renameFile(tab.path, tab.name, (result) => {
+        if (result) {
+          const treeItem = document.querySelector(`.tree-item[data-path="${CSS.escape(tab.path)}"]`);
+          tab.path = result.newPath;
+          tab.name = result.newName;
+          if (tab.id === state.activeTab) $statusPath.textContent = result.newPath;
+          if (treeItem) {
+            treeItem.dataset.path = result.newPath;
+            const nameSpan = treeItem.querySelector('.name');
+            if (nameSpan) nameSpan.textContent = result.newName;
+            const icon = treeItem.querySelector('.icon');
+            if (icon) icon.textContent = fileIcon(path.extname(result.newName).toLowerCase());
+          }
+        }
+        renderTabs();
+      });
+      title.textContent = '';
+      title.appendChild(input);
+    });
+
     $tabs.appendChild(el);
   }
 }
@@ -202,16 +291,47 @@ function updateStatusBar(tab) {
 
 async function saveActiveTab() {
   const tab = state.tabs.find(t => t.id === state.activeTab);
-  if (!tab || !tab.dirty) return;
+  if (!tab) return;
+  if (!tab.path) {
+    const filePath = await ipcRenderer.invoke('save-file-dialog', tab.name);
+    if (!filePath) return;
+    tab.path = filePath;
+    tab.name = path.basename(filePath);
+  }
+  if (!tab.dirty && tab.savedContent === tab.content) return;
   const success = await ipcRenderer.invoke('write-file', tab.path, tab.content);
   if (success) {
     tab.dirty = false;
     tab.savedContent = tab.content;
     renderTabs();
+    $statusPath.textContent = tab.path;
   }
 }
 
+// --- New File ---
+
+let untitledCount = 0;
+
+function newFile() {
+  untitledCount++;
+  const name = untitledCount === 1 ? 'Untitled.md' : `Untitled-${untitledCount}.md`;
+  const tab = {
+    id: Date.now().toString(),
+    path: null,
+    name,
+    content: '',
+    savedContent: '',
+    dirty: false,
+    editorView: null
+  };
+  state.tabs.push(tab);
+  renderTabs();
+  activateTab(tab.id);
+}
+
 // --- Events ---
+
+$('#btn-new-file').addEventListener('click', () => newFile());
 
 $('#btn-search').addEventListener('click', () => {
   const tab = state.tabs.find(t => t.id === state.activeTab);
@@ -301,8 +421,18 @@ $('#setting-spacing').addEventListener('input', (e) => { settings.spacing = +e.t
 
 applySettings();
 
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    ipcRenderer.send('renderer-ready');
+  });
+});
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'n') {
+    e.preventDefault();
+    newFile();
+  }
   if (e.ctrlKey && e.key === 'o') {
     e.preventDefault();
     $('#btn-open-file').click();
