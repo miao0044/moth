@@ -1,0 +1,29 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="wing" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#e0be8a"/>
+      <stop offset="100%" stop-color="#c49060"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="80" fill="#1a1a1a"/>
+
+  <!-- upper wings -->
+  <path d="M256,205 C310,170 400,118 422,168 C438,205 378,282 256,286 Z" fill="url(#wing)"/>
+  <path d="M256,205 C202,170 112,118 90,168 C74,205 134,282 256,286 Z" fill="url(#wing)"/>
+
+  <!-- lower wings -->
+  <path d="M256,286 C296,290 382,326 366,365 C352,398 302,400 256,374 Z" fill="#b08050"/>
+  <path d="M256,286 C216,290 130,326 146,365 C160,398 210,400 256,374 Z" fill="#b08050"/>
+
+  <!-- body -->
+  <path d="M256,188 C265,188 270,218 270,282 C270,346 265,374 256,374
+           C247,374 242,346 242,282 C242,218 247,188 256,188 Z" fill="#6e5030"/>
+
+  <!-- head -->
+  <circle cx="256" cy="184" r="13" fill="#6e5030"/>
+
+  <!-- antennae -->
+  <path d="M248,176 Q222,132 194,116" stroke="#8a6842" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M264,176 Q290,132 318,116" stroke="#8a6842" stroke-width="5" fill="none" stroke-linecap="round"/>
+</svg>

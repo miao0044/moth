@@ -19,14 +19,15 @@ if (!gotLock) {
   let pendingFile = findFileArg(process.argv);
 
   app.on('second-instance', (_e, argv) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      createWindow();
+    }
     const file = findFileArg(argv);
-    if (file && mainWindow) {
+    if (file) {
       mainWindow.webContents.send('open-file-path', file);
     }
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   });
 
   function createWindow() {
@@ -37,6 +38,12 @@ if (!gotLock) {
       minHeight: 400,
       show: false,
       backgroundColor: '#262626',
+      titleBarStyle: 'hidden',
+      titleBarOverlay: {
+        color: '#1e1e1e',
+        symbolColor: '#cccccc',
+        height: 36
+      },
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false
@@ -115,5 +122,5 @@ if (!gotLock) {
   });
 
   app.whenReady().then(createWindow);
-  app.on('window-all-closed', () => app.quit());
+  app.on('window-all-closed', () => app.exit(0));
 }

@@ -308,6 +308,22 @@ async function saveActiveTab() {
   }
 }
 
+async function saveAsActiveTab() {
+  const tab = state.tabs.find(t => t.id === state.activeTab);
+  if (!tab) return;
+  const filePath = await ipcRenderer.invoke('save-file-dialog', tab.name);
+  if (!filePath) return;
+  const success = await ipcRenderer.invoke('write-file', filePath, tab.content);
+  if (success) {
+    tab.path = filePath;
+    tab.name = path.basename(filePath);
+    tab.dirty = false;
+    tab.savedContent = tab.content;
+    renderTabs();
+    $statusPath.textContent = filePath;
+  }
+}
+
 // --- New File ---
 
 let untitledCount = 0;
@@ -437,7 +453,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     $('#btn-open-file').click();
   }
-  if (e.ctrlKey && e.key === 's') {
+  if (e.ctrlKey && e.shiftKey && e.key === 'S') {
+    e.preventDefault();
+    saveAsActiveTab();
+  } else if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
     saveActiveTab();
   }
