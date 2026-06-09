@@ -19,13 +19,16 @@ if (!gotLock) {
   let pendingFile = findFileArg(process.argv);
 
   app.on('second-instance', (_e, argv) => {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      createWindow();
-    }
     const file = findFileArg(argv);
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      if (file) pendingFile = file;
+      createWindow();
+      return;
+    }
     if (file) {
       mainWindow.webContents.send('open-file-path', file);
     }
+    if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   });
@@ -49,7 +52,20 @@ if (!gotLock) {
         contextIsolation: false
       }
     });
-    ipcMain.once('renderer-ready', () => mainWindow.show());
+    const win = mainWindow;
+    // renderer-ready relies on requestAnimationFrame, which may never fire in a
+    // hidden window (no compositor frames) — without this fallback the window
+    // stays invisible forever and the process lingers holding the instance lock
+    const showFallback = setTimeout(() => {
+      if (!win.isDestroyed() && !win.isVisible()) win.show();
+    }, 1500);
+    ipcMain.once('renderer-ready', () => {
+      clearTimeout(showFallback);
+      if (!win.isDestroyed() && !win.isVisible()) win.show();
+    });
+    win.on('closed', () => {
+      if (mainWindow === win) mainWindow = null;
+    });
     mainWindow.loadFile('index.html');
     mainWindow.setMenuBarVisibility(false);
   }
