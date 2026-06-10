@@ -62,7 +62,7 @@ async function renderTree(dirPath, container, depth) {
           await renderTree(entry.path, children, depth + 1);
         }
       });
-    } else if (['.md', '.markdown', '.txt'].includes(entry.ext)) {
+    } else if (['.md', '.markdown', '.txt', '.json'].includes(entry.ext)) {
       row.addEventListener('click', () => openFile(entry.path));
     } else {
       row.style.color = '#555';
@@ -139,6 +139,7 @@ async function renameFile(oldPath, oldName, onDone) {
 function fileIcon(ext) {
   if (ext === '.md' || ext === '.markdown') return '◇';
   if (ext === '.txt') return '◇';
+  if (ext === '.json') return '◇';
   if (ext === '.pdf') return '▪';
   if (['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext)) return '▪';
   return '·';
@@ -275,7 +276,8 @@ function renderContent(tab) {
         tab.dirty = (newContent !== tab.savedContent);
         renderTabs();
         updateStatusBar(tab);
-      }
+      },
+      fileExt: path.extname(tab.name).toLowerCase()
     });
   } else {
     $content.appendChild(tab.editorView.dom);

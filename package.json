@@ -8,6 +8,7 @@
     "dist": "node esbuild.config.mjs && electron-builder --win"
   },
   "devDependencies": {
+    "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
     "codemirror": "^6.0.2",
@@ -52,6 +53,12 @@
         "ext": "markdown",
         "name": "Markdown File",
         "description": "Markdown File",
+        "role": "Editor"
+      },
+      {
+        "ext": "json",
+        "name": "JSON File",
+        "description": "JSON File",
         "role": "Editor"
       }
     ],

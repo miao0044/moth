@@ -5,7 +5,7 @@ const fs = require('fs');
 nativeTheme.themeSource = 'dark';
 app.disableHardwareAcceleration();
 
-const FILE_EXTS = ['.md', '.markdown', '.txt'];
+const FILE_EXTS = ['.md', '.markdown', '.txt', '.json'];
 
 function findFileArg(argv) {
   return argv.find(a => FILE_EXTS.includes(path.extname(a).toLowerCase()) && fs.existsSync(a));
@@ -84,7 +84,11 @@ if (!gotLock) {
 
   ipcMain.handle('open-file-dialog', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }],
+      filters: [
+          { name: 'Supported Files', extensions: ['md', 'markdown', 'txt', 'json'] },
+          { name: 'Markdown', extensions: ['md', 'markdown'] },
+          { name: 'JSON', extensions: ['json'] },
+        ],
       properties: ['openFile']
     });
     if (result.canceled) return null;
@@ -97,6 +101,7 @@ if (!gotLock) {
       filters: [
         { name: 'Markdown', extensions: ['md', 'markdown'] },
         { name: 'Text', extensions: ['txt'] },
+        { name: 'JSON', extensions: ['json'] },
         { name: 'All Files', extensions: ['*'] }
       ]
     });
