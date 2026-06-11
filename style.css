@@ -186,6 +186,7 @@ body {
   display: inline-flex;
   align-items: center;
   padding: 7px 14px;
+  font-family: "Lexend", sans-serif;
   font-size: 14px;
   cursor: pointer;
   border-right: 1px solid var(--border);
