@@ -1,6 +1,26 @@
+# Dependencies and generated output
 node_modules/
 dist/
 release/
-CLAUDE.md
+
+# Machine-local agent configuration and launchers
+.mcp.json
 cc.ps1
-test.md
+codex.ps1
+glm.ps1
+
+# Local credentials and machine-specific environment files
+.env
+.env.*
+!.env.example
+
+# Disposable diagnostics and editor leftovers
+*.log
+*.tmp
+*.bak
+
+# Editor and operating-system metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

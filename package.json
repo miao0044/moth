@@ -1,6 +1,8 @@
 {
   "name": "moth",
   "version": "1.0.0",
+  "description": "A dark, minimal Markdown editor and EPUB reader for Windows.",
+  "author": "miao0044",
   "main": "main.js",
   "scripts": {
     "icons": "node build/generate-icon.js",
@@ -11,17 +13,18 @@
     "register-associations": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-file-associations.ps1 -OpenDefaultAppsSettings"
   },
   "devDependencies": {
-    "@codemirror/legacy-modes": "6.5.3",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
+    "@codemirror/legacy-modes": "6.5.3",
     "@fontsource/atkinson-hyperlegible": "5.3.0",
     "@fontsource/lexend": "5.3.0",
     "codemirror": "^6.0.2",
     "electron": "^28.0.0",
     "electron-builder": "^26.0.0",
-    "esbuild": "^0.28.0",
     "epubjs": "0.3.93",
+    "esbuild": "^0.28.0",
+    "jszip": "3.10.1",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5"
   },
@@ -84,11 +87,6 @@
         "description": "EPUB eBook",
         "role": "Viewer"
       }
-    ],
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    }
+    ]
   }
 }

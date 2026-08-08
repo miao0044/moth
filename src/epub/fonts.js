@@ -34,4 +34,3 @@ export const bundledFontFaces = [
   face('Atkinson Hyperlegible', atkinson700Normal, 700),
   face('Atkinson Hyperlegible', atkinson700Italic, 700, 'italic'),
 ].join('\n');
-
