@@ -3,20 +3,30 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
+    "icons": "node build/generate-icon.js",
     "build": "node esbuild.config.mjs",
+    "qa": "node esbuild.config.mjs && electron scripts/qa-electron.cjs",
     "start": "node esbuild.config.mjs && electron .",
-    "dist": "node esbuild.config.mjs && electron-builder --win"
+    "dist": "npm run icons && node esbuild.config.mjs && electron-builder --win",
+    "register-associations": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-file-associations.ps1 -OpenDefaultAppsSettings"
   },
   "devDependencies": {
+    "@codemirror/legacy-modes": "6.5.3",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
+    "@fontsource/atkinson-hyperlegible": "5.3.0",
+    "@fontsource/lexend": "5.3.0",
     "codemirror": "^6.0.2",
     "electron": "^28.0.0",
     "electron-builder": "^26.0.0",
     "esbuild": "^0.28.0",
+    "epubjs": "0.3.93",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.8.13"
   },
   "build": {
     "appId": "com.moth.editor",
@@ -29,6 +39,7 @@
       "renderer.js",
       "index.html",
       "style.css",
+      "THIRD_PARTY_NOTICES.md",
       "dist/**/*",
       "!dist/*.map"
     ],
@@ -60,6 +71,18 @@
         "name": "JSON File",
         "description": "JSON File",
         "role": "Editor"
+      },
+      {
+        "ext": "jsonl",
+        "name": "JSON Lines File",
+        "description": "JSON Lines File",
+        "role": "Editor"
+      },
+      {
+        "ext": "epub",
+        "name": "EPUB Book",
+        "description": "EPUB eBook",
+        "role": "Viewer"
       }
     ],
     "nsis": {

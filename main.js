@@ -5,7 +5,7 @@ const fs = require('fs');
 nativeTheme.themeSource = 'dark';
 app.disableHardwareAcceleration();
 
-const FILE_EXTS = ['.md', '.markdown', '.txt', '.json'];
+const FILE_EXTS = ['.md', '.markdown', '.txt', '.json', '.jsonl', '.epub'];
 
 function findFileArg(argv) {
   return argv.find(a => FILE_EXTS.includes(path.extname(a).toLowerCase()) && fs.existsSync(a));
@@ -53,17 +53,40 @@ if (!gotLock) {
       }
     });
     const win = mainWindow;
+    let rendererReadyForClose = false;
+    let closeRequestPending = false;
+    let closeApproved = false;
+
+    const handleWindowCloseResponse = (event, shouldClose) => {
+      if (event.sender !== win.webContents || !closeRequestPending) return;
+      closeRequestPending = false;
+      if (!shouldClose || win.isDestroyed()) return;
+      closeApproved = true;
+      win.close();
+    };
+    ipcMain.on('window-close-response', handleWindowCloseResponse);
+
+    win.on('close', (event) => {
+      if (closeApproved || !rendererReadyForClose || win.webContents.isDestroyed()) return;
+      event.preventDefault();
+      if (closeRequestPending) return;
+      closeRequestPending = true;
+      win.webContents.send('window-close-requested');
+    });
     // renderer-ready relies on requestAnimationFrame, which may never fire in a
     // hidden window (no compositor frames) — without this fallback the window
     // stays invisible forever and the process lingers holding the instance lock
     const showFallback = setTimeout(() => {
       if (!win.isDestroyed() && !win.isVisible()) win.show();
     }, 1500);
-    ipcMain.once('renderer-ready', () => {
+    ipcMain.once('renderer-ready', (event) => {
+      if (event.sender !== win.webContents) return;
+      rendererReadyForClose = true;
       clearTimeout(showFallback);
       if (!win.isDestroyed() && !win.isVisible()) win.show();
     });
     win.on('closed', () => {
+      ipcMain.removeListener('window-close-response', handleWindowCloseResponse);
       if (mainWindow === win) mainWindow = null;
     });
     mainWindow.loadFile('index.html');
@@ -85,10 +108,11 @@ if (!gotLock) {
   ipcMain.handle('open-file-dialog', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       filters: [
-          { name: 'Supported Files', extensions: ['md', 'markdown', 'txt', 'json'] },
-          { name: 'Markdown', extensions: ['md', 'markdown'] },
-          { name: 'JSON', extensions: ['json'] },
-        ],
+        { name: 'Supported Files', extensions: ['md', 'markdown', 'txt', 'json', 'jsonl', 'epub'] },
+        { name: 'Markdown', extensions: ['md', 'markdown'] },
+        { name: 'JSON', extensions: ['json', 'jsonl'] },
+        { name: 'EPUB', extensions: ['epub'] },
+      ],
       properties: ['openFile']
     });
     if (result.canceled) return null;
@@ -101,12 +125,41 @@ if (!gotLock) {
       filters: [
         { name: 'Markdown', extensions: ['md', 'markdown'] },
         { name: 'Text', extensions: ['txt'] },
-        { name: 'JSON', extensions: ['json'] },
+        { name: 'JSON', extensions: ['json', 'jsonl'] },
         { name: 'All Files', extensions: ['*'] }
       ]
     });
     if (result.canceled) return null;
     return result.filePath;
+  });
+
+  ipcMain.handle('confirm-discard-changes', async (event, details = {}) => {
+    const names = Array.isArray(details.names)
+      ? details.names.filter((name) => typeof name === 'string' && name.trim()).slice(0, 10)
+      : [];
+    const isWindowClose = details.scope === 'window';
+    const count = Math.max(names.length, Number.isFinite(details.count) ? Math.trunc(details.count) : 0);
+    const message = isWindowClose
+      ? `Discard unsaved changes in ${count || 'the open'} ${count === 1 ? 'file' : 'files'}?`
+      : `Discard unsaved changes in "${names[0] || 'this file'}"?`;
+    const detail = isWindowClose && names.length
+      ? names.map((name) => `• ${name}`).join('\n')
+      : 'Changes that have not been saved will be lost.';
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      type: 'warning',
+      title: 'Unsaved changes',
+      message,
+      detail,
+      buttons: ['Keep Editing', 'Discard Changes'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    };
+    const result = owner && !owner.isDestroyed()
+      ? await dialog.showMessageBox(owner, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1;
   });
 
   ipcMain.handle('rename-file', (_, oldPath, newPath) => {
@@ -135,6 +188,23 @@ if (!gotLock) {
   ipcMain.handle('read-file', (_, filePath) => {
     try { return fs.readFileSync(filePath, 'utf-8'); }
     catch { return null; }
+  });
+
+  ipcMain.handle('read-epub', async (_, filePath) => {
+    try {
+      const [data, stat] = await Promise.all([
+        fs.promises.readFile(filePath),
+        fs.promises.stat(filePath)
+      ]);
+      return {
+        ok: true,
+        data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs
+      };
+    } catch (error) {
+      return { ok: false, code: error && error.code ? error.code : 'READ_FAILED' };
+    }
   });
 
   ipcMain.handle('write-file', (_, filePath, content) => {

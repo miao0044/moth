@@ -3,21 +3,35 @@
 <head>
   <meta charset="UTF-8">
   <title>Moth</title>
+  <link rel="stylesheet" href="dist/fonts.css">
   <link rel="stylesheet" href="style.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400;1,700&family=Lexend:wght@300;400;500;600;700&display=swap" media="print" onload="this.media='all'">
 </head>
 <body>
   <div id="app">
     <div id="sidebar" class="collapsed">
-      <div id="sidebar-header">
-        <button id="btn-open-folder" title="Open Folder"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h4l1.5 1.5H14v7H2V4.5z"/></svg></button>
-        <button id="btn-open-file" title="Open File"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2h5L13 5.5V14H4.5V2z"/><path d="M9.5 2v4H13"/></svg></button>
-        <button id="btn-search" title="Find & Replace (Ctrl+H)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4"/><path d="M10 10l3.5 3.5"/></svg></button>
-        <span id="folder-name">No folder open</span>
+      <div id="file-sidebar" class="sidebar-pane">
+        <div id="sidebar-header">
+          <button id="btn-open-folder" title="Open Folder"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h4l1.5 1.5H14v7H2V4.5z"/></svg></button>
+          <button id="btn-open-file" title="Open File"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2h5L13 5.5V14H4.5V2z"/><path d="M9.5 2v4H13"/></svg></button>
+          <button id="btn-search" title="Find & Replace (Ctrl+H)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4"/><path d="M10 10l3.5 3.5"/></svg></button>
+          <span id="folder-name">No folder open</span>
+        </div>
+        <div id="file-tree"></div>
       </div>
-      <div id="file-tree"></div>
+      <div id="epub-sidebar" class="sidebar-pane hidden">
+        <div id="epub-sidebar-header">
+          <span class="sidebar-kicker">CONTENTS</span>
+          <span id="epub-book-title">Book</span>
+        </div>
+        <nav id="epub-toc" aria-label="Book contents"></nav>
+        <div id="epub-sidebar-footer">
+          <div id="epub-progress-label">Opening…</div>
+          <div class="epub-nav-row">
+            <button id="btn-epub-prev" type="button" title="Previous chapter">← Previous</button>
+            <button id="btn-epub-next" type="button" title="Next chapter">Next →</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div id="sidebar-resize"></div>
     <div id="main">
