@@ -11,8 +11,7 @@ const MAX_SAVED_BOOKS = 50;
 function fileKind(filePath) {
   const ext = path.extname(filePath || '').toLowerCase();
   if (ext === '.epub') return 'epub';
-  if (TEXT_EXTS.has(ext)) return 'text';
-  return null;
+  return 'text';
 }
 
 const state = {
@@ -38,7 +37,7 @@ const $epubNext = $('#btn-epub-next');
 const $statusPath = $('#status-path');
 const $statusStats = $('#status-stats');
 
-const defaults = { font: 'serif', fontSize: 16, padding: 50, spacing: 100 };
+const defaults = { font: 'Lexend, sans-serif', fontSize: 16, padding: 50, spacing: 100 };
 const settings = { ...defaults, ...readStoredObject('md-settings') };
 const epubPositions = readStoredObject(EPUB_PROGRESS_KEY);
 let discardPromptInFlight = false;
@@ -64,7 +63,8 @@ function activeTab() {
 
 function sameFile(a, b) {
   if (!a || !b) return a === b;
-  return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  const ra = path.resolve(a), rb = path.resolve(b);
+  return process.platform === 'win32' ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
 }
 
 function isOpenTab(tab) {
@@ -245,7 +245,6 @@ async function openFile(filePath) {
     await openEpubFile(filePath);
     return;
   }
-  if (!TEXT_EXTS.has(ext)) return;
 
   const content = await ipcRenderer.invoke('read-file', filePath);
   if (content === null) return;
@@ -804,7 +803,8 @@ function refreshActiveEpubUi(tab, rerenderToc = false) {
 }
 
 function progressKey(filePath) {
-  return path.resolve(filePath).toLowerCase();
+  const resolved = path.resolve(filePath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 function saveEpubPosition(tab) {
@@ -882,11 +882,22 @@ $epubNext.addEventListener('click', () => {
   if (tab && tab.kind === 'epub' && tab.epubView) tab.epubView.goChapter('next').catch(() => {});
 });
 
-$('#btn-toggle-sidebar').addEventListener('click', () => $sidebar.classList.toggle('collapsed'));
+function prepareActiveEpubResize() {
+  const tab = activeTab();
+  if (tab && tab.kind === 'epub' && tab.epubView) tab.epubView.prepareResize?.();
+}
+
+function toggleSidebar() {
+  prepareActiveEpubResize();
+  $sidebar.classList.toggle('collapsed');
+}
+
+$('#btn-toggle-sidebar').addEventListener('click', toggleSidebar);
 
 const resizer = $('#sidebar-resize');
 let isResizing = false;
 resizer.addEventListener('mousedown', () => {
+  prepareActiveEpubResize();
   isResizing = true;
   document.body.style.cursor = 'col-resize';
 });
@@ -894,8 +905,6 @@ document.addEventListener('mousemove', (event) => {
   if (!isResizing) return;
   const width = Math.max(160, Math.min(500, event.clientX));
   $sidebar.style.width = `${width}px`;
-  const tab = activeTab();
-  if (tab && tab.kind === 'epub' && tab.epubView) tab.epubView.resize();
 });
 document.addEventListener('mouseup', () => {
   isResizing = false;
@@ -1002,6 +1011,35 @@ ipcRenderer.on('window-close-requested', async () => {
   }
 });
 
+document.documentElement.dataset.platform = process.platform;
+
+if (process.platform === 'linux') {
+  const tabBar = $('#tab-bar');
+  const btnContainer = document.createElement('div');
+  btnContainer.id = 'window-controls';
+  btnContainer.innerHTML =
+    '<button id="btn-win-minimize" title="Minimize">&#x2500;</button>' +
+    '<button id="btn-win-maximize" title="Maximize">&#x25A1;</button>' +
+    '<button id="btn-win-close" title="Close">&#x2715;</button>';
+  tabBar.appendChild(btnContainer);
+
+  $('#btn-win-minimize').addEventListener('click', () => ipcRenderer.send('window-minimize'));
+  $('#btn-win-maximize').addEventListener('click', () => ipcRenderer.send('window-maximize'));
+  $('#btn-win-close').addEventListener('click', () => ipcRenderer.send('window-close'));
+
+  ipcRenderer.on('window-maximized-changed', (_e, maximized) => {
+    $('#btn-win-maximize').innerHTML = maximized ? '&#x29C9;' : '&#x25A1;';
+    $('#btn-win-maximize').title = maximized ? 'Restore' : 'Maximize';
+  });
+
+  ipcRenderer.invoke('window-is-maximized').then((maximized) => {
+    if (maximized) {
+      $('#btn-win-maximize').innerHTML = '&#x29C9;';
+      $('#btn-win-maximize').title = 'Restore';
+    }
+  });
+}
+
 requestAnimationFrame(() => {
   requestAnimationFrame(() => ipcRenderer.send('renderer-ready'));
 });
@@ -1026,7 +1064,7 @@ document.addEventListener('keydown', (event) => {
     if (state.activeTab) closeTab(state.activeTab);
   } else if (key === 'b') {
     event.preventDefault();
-    $sidebar.classList.toggle('collapsed');
+    toggleSidebar();
   } else if (key === 'f' || key === 'h') {
     const tab = activeTab();
     if (tab && tab.kind === 'text' && tab.editorView) {

@@ -1,7 +1,7 @@
 {
   "name": "moth",
   "version": "1.0.0",
-  "description": "A dark, minimal Markdown editor and EPUB reader for Windows.",
+  "description": "A dark, minimal Markdown editor and EPUB reader.",
   "author": "miao0044",
   "main": "main.js",
   "scripts": {
@@ -10,6 +10,7 @@
     "qa": "node esbuild.config.mjs && electron scripts/qa-electron.cjs",
     "start": "node esbuild.config.mjs && electron .",
     "dist": "npm run icons && node esbuild.config.mjs && electron-builder --win",
+    "dist:linux": "npm run icons && node esbuild.config.mjs && electron-builder --linux",
     "register-associations": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-file-associations.ps1 -OpenDefaultAppsSettings"
   },
   "devDependencies": {
@@ -49,6 +50,11 @@
     "win": {
       "target": "dir",
       "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": "dir",
+      "executableName": "moth",
+      "icon": "build/icon-256.png"
     },
     "fileAssociations": [
       {

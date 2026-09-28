@@ -82,11 +82,11 @@ export function buildThemeCss(settings) {
   const paragraphSpacing = settings.spacing / 100;
 
   return `
-    ${bundledFontFaces}
-
     :root {
       color-scheme: dark !important;
       background: ${settings.background} !important;
+      font-size: ${settings.fontSize}px !important;
+      line-height: ${lineHeight} !important;
     }
 
     html, body {
@@ -107,8 +107,11 @@ export function buildThemeCss(settings) {
       line-height: ${lineHeight} !important;
     }
 
-    body, body * {
+    body, body *, body *::before, body *::after {
       font-family: ${settings.font} !important;
+      font-size: inherit !important;
+      line-height: inherit !important;
+      color: inherit !important;
     }
 
     pre, code, pre *, code *, kbd, samp {
@@ -179,24 +182,96 @@ export function buildThemeCss(settings) {
   `;
 }
 
-const SKIP_TAGS = new Set(['STYLE', 'SCRIPT', 'LINK', 'META', 'TITLE', 'BASE', 'NOSCRIPT']);
+export function buildFontFaceCss() {
+  return bundledFontFaces;
+}
 
-// Stylesheet rules cannot beat a publisher's inline `font-family: ... !important`.
-// Applying the final declaration directly is deliberate: it makes the Moth font
-// authoritative while leaving weight, emphasis, and all non-font layout intact.
-export function enforceFont(contents, settings) {
+const SKIP_TAGS = new Set(['STYLE', 'SCRIPT', 'LINK', 'META', 'TITLE', 'BASE', 'NOSCRIPT']);
+const HEADING_SIZES = Object.freeze({
+  H1: 1.8,
+  H2: 1.5,
+  H3: 1.25,
+  H4: 1.1,
+  H5: 1.05,
+  H6: 1,
+});
+
+function setImportant(style, property, value) {
+  style.setProperty(property, String(value), 'important');
+}
+
+function enforceMothSpacing(element, settings) {
+  const paragraphSpacing = settings.spacing / 100;
+  const tag = element.tagName;
+  let margin = null;
+
+  if (tag === 'P') margin = paragraphSpacing;
+  else if (tag === 'UL' || tag === 'OL') {
+    margin = element.parentElement?.closest?.('li') ? 0.15 * paragraphSpacing : 0.8 * paragraphSpacing;
+    setImportant(element.style, 'padding-left', '2em');
+  } else if (tag === 'LI') {
+    margin = 0.4 * paragraphSpacing;
+  }
+
+  if (margin !== null) {
+    setImportant(element.style, 'margin-top', `${margin}em`);
+    setImportant(element.style, 'margin-bottom', `${margin}em`);
+  }
+}
+
+function mothColor(element, settings) {
+  if (element.tagName === 'BODY') return settings.text;
+  if (HEADING_SIZES[element.tagName] || element.matches?.('strong, b, th')) return settings.textBright;
+  if (element.matches?.('a')) return settings.accent;
+  if (element.matches?.('blockquote')) return settings.textMuted;
+  return 'inherit';
+}
+
+// Stylesheet rules cannot beat a publisher's inline declarations with
+// `!important`. Applying Moth's final typography directly is deliberate: the
+// reader settings remain authoritative while semantic emphasis stays intact.
+export function enforceTypography(contents, settings) {
   const doc = contents?.document;
   const body = contents?.content || doc?.body;
   if (!doc || !body) return;
+
+  const lineHeight = 1.7 * (settings.spacing / 100);
+  const root = doc.documentElement;
+  if (root?.style) {
+    setImportant(root.style, 'font-size', `${settings.fontSize}px`);
+    setImportant(root.style, 'line-height', lineHeight);
+    setImportant(root.style, 'color', settings.text);
+  }
 
   const elements = [body, ...body.querySelectorAll('*')];
   for (const element of elements) {
     if (!element?.style || SKIP_TAGS.has(element.tagName) || element.closest?.('svg')) continue;
     const isCode = element.matches?.('pre, code, kbd, samp') || element.closest?.('pre, code');
-    element.style.setProperty(
-      'font-family',
-      isCode ? settings.monospace : settings.font,
-      'important',
-    );
+    const headingSize = HEADING_SIZES[element.tagName];
+    let fontSize = element === body ? `${settings.fontSize}px` : 'inherit';
+    let elementLineHeight = element === body ? lineHeight : 'inherit';
+
+    if (headingSize) {
+      fontSize = `${headingSize}em`;
+      elementLineHeight = 1.3;
+    } else if (element.tagName === 'CODE') {
+      fontSize = element.closest?.('pre') ? '0.875em' : '0.9em';
+    } else if (element.tagName === 'SMALL') {
+      fontSize = '0.875em';
+    } else if (element.matches?.('SUP, SUB')) {
+      fontSize = '0.75em';
+    }
+
+    setImportant(element.style, 'font-family', isCode ? settings.monospace : settings.font);
+    setImportant(element.style, 'font-size', fontSize);
+    setImportant(element.style, 'line-height', elementLineHeight);
+    setImportant(element.style, 'color', mothColor(element, settings));
+    if (element === body) {
+      setImportant(element.style, 'box-sizing', 'border-box');
+      setImportant(element.style, 'width', 'auto');
+      setImportant(element.style, 'margin', '0');
+      setImportant(element.style, 'padding', `30px ${settings.padding}px 64px`);
+    }
+    enforceMothSpacing(element, settings);
   }
 }

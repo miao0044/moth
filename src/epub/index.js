@@ -1,12 +1,17 @@
 import ePub from 'epubjs';
 import {
+  buildFontFaceCss,
   buildThemeCss,
-  enforceFont,
+  enforceTypography,
   mergeSettings,
   normalizeSettings,
 } from './theme.js';
 
 const DEFAULT_LOCATION_BREAK = 1600;
+const RESIZE_SETTLE_FRAMES = 2;
+const PREPARED_RESIZE_TTL = 1500;
+const TEXT_ANCHOR_VIEWPORT_RATIO = 0.32;
+const TEXT_ANCHOR_MAX_OFFSET = 220;
 const FONT_OBFUSCATION_ALGORITHMS = new Set([
   'http://www.idpf.org/2008/embedding',
   'http://ns.adobe.com/pdf/enc#RC',
@@ -38,6 +43,9 @@ const SURFACE_CSS = `
     display: block;
     height: calc(100% - 72px);
     pointer-events: none;
+  }
+  .epub-frame-host.epub-reflowing .epub-container {
+    visibility: hidden;
   }
   .epub-state {
     position: absolute;
@@ -442,6 +450,9 @@ function createEpubView(parent, data, options = {}) {
   let resizeFrame = null;
   let resizeTask = null;
   let resizeAnchor = null;
+  let preparedResizeAnchor = null;
+  let preparedResizeUntil = 0;
+  let resizeStableFrames = 0;
   let locationSuppressionCount = 0;
   let navigationMutating = false;
   let guardedLocationIndex = null;
@@ -566,17 +577,16 @@ function createEpubView(parent, data, options = {}) {
   function updateTheme() {
     if (!rendition) return;
     const css = buildThemeCss(settings);
-    rendition.themes.registerCss('moth', css);
-    rendition.themes.select('moth');
     for (const contents of rendition.getContents()) {
-      contents.addStylesheetCss(css, 'moth');
-      enforceFont(contents, settings);
+      contents.addStylesheetCss(css, 'moth-theme');
+      enforceTypography(contents, settings);
     }
   }
 
   function applyThemeToContents(contents) {
-    contents.addStylesheetCss(buildThemeCss(settings), 'moth');
-    enforceFont(contents, settings);
+    contents.addStylesheetCss(buildFontFaceCss(), 'moth-fonts');
+    contents.addStylesheetCss(buildThemeCss(settings), 'moth-theme');
+    enforceTypography(contents, settings);
   }
 
   function measuredSize(width, height) {
@@ -589,53 +599,106 @@ function createEpubView(parent, data, options = {}) {
     };
   }
 
+  function prepareResize() {
+    if (!rendition || phase !== 'ready') return false;
+    if (resizeAnchor || pendingResize || resizeFrame !== null || resizeTask) return true;
+    const anchor = captureResizeAnchor(lastLocation?.cfi || currentCfi(rendition));
+    if (!anchor) return false;
+    preparedResizeAnchor = anchor;
+    preparedResizeUntil = Date.now() + PREPARED_RESIZE_TTL;
+    guardLocation(anchor.cfi);
+    return true;
+  }
+
+  function takePreparedResizeAnchor() {
+    if (!preparedResizeAnchor || Date.now() > preparedResizeUntil) {
+      preparedResizeAnchor = null;
+      preparedResizeUntil = 0;
+      return null;
+    }
+    const anchor = preparedResizeAnchor;
+    preparedResizeAnchor = null;
+    preparedResizeUntil = 0;
+    return anchor;
+  }
+
   function resize(width, height) {
     // EPUB.js clears the manager during resize. Before the first relocated
     // event there is no CFI to redisplay, so resizing during startup would
     // leave an empty container.
     if (!rendition || phase !== 'ready') return false;
-    const anchor = resizeAnchor || captureResizeAnchor(lastLocation?.cfi || currentCfi(rendition));
-    if (!anchor) return false;
-    guardLocation(anchor.cfi);
     const size = measuredSize(width, height);
     if (size.width < 1 || size.height < 1) return false;
     if (Math.abs(size.width - requestedWidth) < 1 && Math.abs(size.height - requestedHeight) < 1) return false;
+    const anchor = resizeAnchor
+      || takePreparedResizeAnchor()
+      || captureResizeAnchor(lastLocation?.cfi || currentCfi(rendition));
+    if (!anchor) return false;
+    guardLocation(anchor.cfi);
     requestedWidth = size.width;
     requestedHeight = size.height;
     resizeAnchor = anchor;
     pendingResize = { ...size, anchor };
+    resizeStableFrames = 0;
     scheduleResize();
     return true;
   }
 
   function scheduleResize() {
-    // Keep at most one active resize and one replaceable pending request.
-    // A sidebar transition can emit on every animation frame; chaining every
-    // intermediate width leaves stale anchors queued behind later navigation.
+    // Wait for the host size to settle before asking EPUB.js to resize. A
+    // sidebar transition publishes an intermediate width on every frame, and
+    // EPUB.js destroys/rebuilds its views for each resize. Trailing coalescing
+    // keeps the first reading anchor but commits only the final dimensions.
     if (resizeFrame !== null || resizeTask || settingsMutating || navigationMutating || !pendingResize) return;
     resizeFrame = requestAnimationFrame(() => {
       resizeFrame = null;
       if (resizeTask || settingsMutating || navigationMutating || !pendingResize) return;
+      const measured = measuredSize();
+      if (measured.width < 1 || measured.height < 1) {
+        requestedWidth = lastWidth;
+        requestedHeight = lastHeight;
+        pendingResize = null;
+        resizeAnchor = null;
+        resizeStableFrames = 0;
+        return;
+      }
+      if (Math.abs(measured.width - pendingResize.width) >= 1
+        || Math.abs(measured.height - pendingResize.height) >= 1) {
+        requestedWidth = measured.width;
+        requestedHeight = measured.height;
+        pendingResize = { ...measured, anchor: resizeAnchor || pendingResize.anchor };
+        resizeStableFrames = 0;
+        scheduleResize();
+        return;
+      }
+      resizeStableFrames += 1;
+      if (resizeStableFrames <= RESIZE_SETTLE_FRAMES) {
+        scheduleResize();
+        return;
+      }
       const request = pendingResize;
       pendingResize = null;
+      resizeStableFrames = 0;
       const task = (async () => {
         if (phase !== 'ready' || !rendition) return;
         const { width, height, anchor } = request;
         const releaseLocations = suppressLocations();
+        dom.frameHost.classList.add('epub-reflowing');
         try {
           await resizeAndWaitForSection(rendition, width, height, anchor.cfi);
           if (phase !== 'ready' || !rendition) return;
           updateTheme();
           await waitForRenditionLayout(rendition);
-          const section = book.spine.get(anchor.cfi);
-          if (section) alignTargetInContinuousView(section, anchor.target, anchor.viewportOffset);
+          await alignCapturedAnchor(anchor, 6);
           await reportAlignedLocation();
-          if (section) alignTargetInContinuousView(section, anchor.target, anchor.viewportOffset);
+          await alignCapturedAnchor(anchor);
+          dom.frameHost.classList.remove('epub-reflowing');
           releaseLocations();
           await reportAlignedLocation();
           lastWidth = width;
           lastHeight = height;
         } finally {
+          dom.frameHost.classList.remove('epub-reflowing');
           releaseLocations();
         }
       })().catch((error) => {
@@ -701,9 +764,156 @@ function createEpubView(parent, data, options = {}) {
     }
   }
 
+  function textPointFromRange(doc, sourceRange, preferredTop) {
+    const node = sourceRange?.startContainer;
+    if (!node || node.nodeType !== 3 || !node.data?.length) return null;
+    const baseOffset = Math.min(node.data.length, Math.max(0, sourceRange.startOffset));
+    let best = null;
+
+    // caretRangeFromPoint can land immediately before whitespace. Normalize to
+    // the closest rendered character so the saved CFI always has a glyph whose
+    // viewport position can be measured again after EPUB.js rebuilds the iframe.
+    for (let distance = 0; distance <= 48; distance += 1) {
+      const offsets = distance === 0
+        ? [baseOffset]
+        : [baseOffset + distance, baseOffset - distance];
+      for (const offset of offsets) {
+        if (offset < 0 || offset >= node.data.length || /\s/.test(node.data[offset])) continue;
+        const codePoint = node.data.codePointAt(offset);
+        const probeLength = codePoint > 0xffff ? 2 : 1;
+        if (offset + probeLength > node.data.length) continue;
+        const probe = doc.createRange();
+        probe.setStart(node, offset);
+        probe.setEnd(node, offset + probeLength);
+        const rect = [...probe.getClientRects()].find((candidate) => candidate.height > 0);
+        if (!rect) continue;
+        const score = Math.abs(rect.top - preferredTop);
+        if (!best || score < best.score) {
+          const caret = doc.createRange();
+          caret.setStart(node, offset);
+          caret.collapse(true);
+          best = {
+            caret,
+            rect,
+            probeLength,
+            score,
+            exact: node.data.slice(offset, offset + probeLength),
+            prefix: node.data.slice(Math.max(0, offset - 20), offset),
+            suffix: node.data.slice(offset + probeLength, offset + probeLength + 20),
+          };
+        }
+      }
+      if (best && best.score <= 1) break;
+    }
+    return best;
+  }
+
+  function caretRangeAtPoint(doc, x, y) {
+    if (typeof doc.caretRangeFromPoint === 'function') return doc.caretRangeFromPoint(x, y);
+    if (typeof doc.caretPositionFromPoint !== 'function') return null;
+    const position = doc.caretPositionFromPoint(x, y);
+    if (!position?.offsetNode) return null;
+    const range = doc.createRange();
+    range.setStart(position.offsetNode, position.offset);
+    range.collapse(true);
+    return range;
+  }
+
+  function captureVisibleTextAnchor() {
+    const manager = rendition?.manager;
+    const container = manager?.container;
+    const views = manager?.views?.displayed?.() || manager?.views?.all?.() || [];
+    if (!container || !views.length) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    if (containerRect.width < 1 || containerRect.height < 1) return null;
+    const targetTop = containerRect.top + Math.min(
+      TEXT_ANCHOR_MAX_OFFSET,
+      Math.max(48, containerRect.height * TEXT_ANCHOR_VIEWPORT_RATIO),
+    );
+    let best = null;
+
+    for (const view of views) {
+      const iframe = view?.iframe;
+      const doc = view?.contents?.document;
+      const body = view?.contents?.content || doc?.body;
+      if (!iframe || !doc || !body || typeof view.contents?.cfiFromRange !== 'function') continue;
+      const iframeRect = iframe.getBoundingClientRect();
+      const visibleTop = Math.max(iframeRect.top, containerRect.top);
+      const visibleBottom = Math.min(iframeRect.bottom, containerRect.bottom);
+      if (visibleBottom - visibleTop < 2) continue;
+      const innerHeight = view.contents?.window?.innerHeight || iframeRect.height;
+      const scaleY = iframeRect.height > 0 && innerHeight > 0 ? iframeRect.height / innerHeight : 1;
+      const walker = doc.createTreeWalker(body, doc.defaultView.NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          if (!node.data?.trim()) return doc.defaultView.NodeFilter.FILTER_REJECT;
+          if (node.parentElement?.closest('style, script, title, noscript, svg')) {
+            return doc.defaultView.NodeFilter.FILTER_REJECT;
+          }
+          return doc.defaultView.NodeFilter.FILTER_ACCEPT;
+        },
+      });
+      let node;
+      while ((node = walker.nextNode())) {
+        const range = doc.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width < 0.5 || rect.height < 0.5) continue;
+          const globalTop = iframeRect.top + rect.top * scaleY;
+          const globalBottom = iframeRect.top + rect.bottom * scaleY;
+          if (globalBottom <= containerRect.top + 1 || globalTop >= containerRect.bottom - 1) continue;
+          const partiallyClipped = globalTop < containerRect.top + 2
+            || globalBottom > containerRect.bottom - 2;
+          const score = Math.abs((globalTop + globalBottom) / 2 - targetTop)
+            + (partiallyClipped ? containerRect.height : 0);
+          if (!best || score < best.score) {
+            best = { view, doc, iframeRect, rect, scaleY, score };
+          }
+        }
+      }
+    }
+
+    if (!best) return null;
+    const xCandidates = [
+      best.rect.left + best.rect.width / 2,
+      best.rect.left + Math.min(4, best.rect.width / 3),
+      best.rect.right - Math.min(4, best.rect.width / 3),
+    ];
+    const localY = best.rect.top + best.rect.height / 2;
+    let point = null;
+    for (const localX of xCandidates) {
+      const sourceRange = caretRangeAtPoint(best.doc, localX, localY);
+      const candidate = textPointFromRange(best.doc, sourceRange, best.rect.top);
+      if (!candidate) continue;
+      if (!point || candidate.score < point.score) point = candidate;
+    }
+    if (!point || point.score > Math.max(4, best.rect.height)) return null;
+
+    try {
+      const cfi = best.view.contents.cfiFromRange(point.caret, best.view.settings?.ignoreClass);
+      const globalTop = best.iframeRect.top + point.rect.top * best.scaleY;
+      return {
+        kind: 'text',
+        cfi,
+        target: cfi,
+        viewportOffset: globalTop - containerRect.top,
+        probeLength: point.probeLength,
+        quote: {
+          exact: point.exact,
+          prefix: point.prefix,
+          suffix: point.suffix,
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
   function captureResizeAnchor(cfi) {
+    const textAnchor = captureVisibleTextAnchor();
+    if (textAnchor) return textAnchor;
     if (!cfi) return null;
-    const anchor = { cfi, target: cfi, viewportOffset: null };
+    const anchor = { kind: 'location', cfi, target: cfi, viewportOffset: null };
     const manager = rendition?.manager;
     const container = manager?.container;
     const section = book?.spine?.get(cfi);
@@ -714,15 +924,99 @@ function createEpubView(parent, data, options = {}) {
       const location = view.locationOf(cfi);
       const containerRect = container.getBoundingClientRect();
       const viewRect = view.element.getBoundingClientRect();
-      const viewOffset = viewRect.top - containerRect.top;
-      const atChapterBoundary = Math.abs(viewOffset) <= 100;
-      const offset = atChapterBoundary ? viewOffset : viewOffset + location.top;
-      if (atChapterBoundary) anchor.target = section.href;
+      const offset = viewRect.top - containerRect.top + location.top;
       if (Number.isFinite(offset)) anchor.viewportOffset = offset;
     } catch {
       // The CFI remains a valid fallback if its view is between render cycles.
     }
     return anchor;
+  }
+
+  function measureTextAnchor(anchor) {
+    const manager = rendition?.manager;
+    const container = manager?.container;
+    const section = book?.spine?.get(anchor?.cfi);
+    const view = section && manager?.views?.find?.(section);
+    if (!container || !view?.iframe || typeof view.contents?.range !== 'function') return null;
+
+    try {
+      const range = view.contents.range(anchor.cfi, view.settings?.ignoreClass);
+      const node = range?.startContainer;
+      const offset = range?.startOffset;
+      if (!node || node.nodeType !== 3 || !Number.isFinite(offset) || offset >= node.data.length) return null;
+      const probeLength = Math.max(1, Math.min(anchor.probeLength || 1, node.data.length - offset));
+      if (anchor.quote?.exact
+        && node.data.slice(offset, offset + probeLength) !== anchor.quote.exact) return null;
+      const probe = view.contents.document.createRange();
+      probe.setStart(node, offset);
+      probe.setEnd(node, offset + probeLength);
+      const rect = [...probe.getClientRects()].find((candidate) => candidate.height > 0);
+      if (!rect) return null;
+      const iframeRect = view.iframe.getBoundingClientRect();
+      const innerHeight = view.contents?.window?.innerHeight || iframeRect.height;
+      const scaleY = iframeRect.height > 0 && innerHeight > 0 ? iframeRect.height / innerHeight : 1;
+      const containerRect = container.getBoundingClientRect();
+      return {
+        manager,
+        container,
+        viewportOffset: iframeRect.top + rect.top * scaleY - containerRect.top,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function renditionGeometrySignature() {
+    const manager = rendition?.manager;
+    const views = manager?.views?.all?.() || [];
+    return views.map((view) => {
+      const elementHeight = view?.element?.getBoundingClientRect?.().height || 0;
+      const iframeHeight = view?.iframe?.getBoundingClientRect?.().height || 0;
+      return `${view?.section?.index ?? '?'}:${view?.displayed ? 1 : 0}:${elementHeight.toFixed(2)}:${iframeHeight.toFixed(2)}`;
+    }).join('|');
+  }
+
+  async function alignCapturedAnchor(anchor, stableFramesRequired = 2) {
+    if (anchor?.kind === 'text' && Number.isFinite(anchor.viewportOffset)) {
+      let measured = false;
+      let previousGeometry = '';
+      let stableFrames = 0;
+      for (let frame = 0; frame < 30; frame += 1) {
+        const current = measureTextAnchor(anchor);
+        if (!current) break;
+        measured = true;
+        const delta = current.viewportOffset - anchor.viewportOffset;
+        if (Math.abs(delta) > 0.5) {
+          current.manager.scrollTo(
+            current.container.scrollLeft,
+            Math.max(0, current.container.scrollTop + delta),
+            false,
+          );
+          stableFrames = 0;
+        }
+        await nextAnimationFrame();
+        const geometry = renditionGeometrySignature();
+        const managerQueue = rendition?.manager?.q;
+        const renditionQueue = rendition?.q;
+        const queueBusy = Boolean(managerQueue?.running)
+          || Boolean(managerQueue?.length?.())
+          || Boolean(renditionQueue?.running)
+          || Boolean(renditionQueue?.length?.());
+        if (Math.abs(delta) <= 0.5 && geometry && geometry === previousGeometry && !queueBusy) {
+          stableFrames += 1;
+          if (stableFrames >= stableFramesRequired) return true;
+        } else {
+          stableFrames = 0;
+        }
+        previousGeometry = geometry;
+      }
+      if (measured) return true;
+    }
+
+    const section = book?.spine?.get(anchor?.cfi);
+    return section
+      ? alignTargetInContinuousView(section, anchor.target, anchor.viewportOffset)
+      : false;
   }
 
   function alignTargetInContinuousView(section, target, viewportOffset = 0) {
@@ -846,15 +1140,9 @@ function createEpubView(parent, data, options = {}) {
         try {
           await waitForRenditionLayout(rendition);
           if (targetVersion !== settingsVersion) continue;
-          if (anchor) {
-            const section = book.spine.get(anchor.cfi);
-            if (section) alignTargetInContinuousView(section, anchor.target, anchor.viewportOffset);
-          }
+          if (anchor) await alignCapturedAnchor(anchor, 4);
           await reportAlignedLocation();
-          if (anchor) {
-            const section = book.spine.get(anchor.cfi);
-            if (section) alignTargetInContinuousView(section, anchor.target, anchor.viewportOffset);
-          }
+          if (anchor) await alignCapturedAnchor(anchor);
           await reportAlignedLocation();
         } finally {
           settingsMutating = false;
@@ -915,6 +1203,9 @@ function createEpubView(parent, data, options = {}) {
     resizeFrame = null;
     pendingResize = null;
     resizeAnchor = null;
+    preparedResizeAnchor = null;
+    preparedResizeUntil = 0;
+    resizeStableFrames = 0;
     locationSuppressionCount = 0;
     navigationMutating = false;
     guardedLocationIndex = null;
@@ -951,6 +1242,7 @@ function createEpubView(parent, data, options = {}) {
     get metadata() { return metadata; },
     attach,
     detach,
+    prepareResize,
     resize,
     display,
     goChapter,

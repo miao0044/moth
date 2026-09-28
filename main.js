@@ -5,10 +5,14 @@ const fs = require('fs');
 nativeTheme.themeSource = 'dark';
 app.disableHardwareAcceleration();
 
-const FILE_EXTS = ['.md', '.markdown', '.txt', '.json', '.jsonl', '.epub'];
+const isLinux = process.platform === 'linux';
 
 function findFileArg(argv) {
-  return argv.find(a => FILE_EXTS.includes(path.extname(a).toLowerCase()) && fs.existsSync(a));
+  const args = argv.slice(app.isPackaged ? 1 : 2);
+  return args.find(a => {
+    if (!a || a.startsWith('-')) return false;
+    try { return fs.statSync(a).isFile(); } catch { return false; }
+  });
 }
 
 const gotLock = app.requestSingleInstanceLock();
@@ -34,7 +38,7 @@ if (!gotLock) {
   });
 
   function createWindow() {
-    mainWindow = new BrowserWindow({
+    const winOptions = {
       width: 1200,
       height: 800,
       minWidth: 600,
@@ -42,16 +46,21 @@ if (!gotLock) {
       show: false,
       backgroundColor: '#262626',
       titleBarStyle: 'hidden',
-      titleBarOverlay: {
-        color: '#1e1e1e',
-        symbolColor: '#cccccc',
-        height: 36
-      },
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false
       }
-    });
+    };
+    if (isLinux) {
+      winOptions.frame = false;
+    } else {
+      winOptions.titleBarOverlay = {
+        color: '#1e1e1e',
+        symbolColor: '#cccccc',
+        height: 36
+      };
+    }
+    mainWindow = new BrowserWindow(winOptions);
     const win = mainWindow;
     let rendererReadyForClose = false;
     let closeRequestPending = false;
@@ -91,6 +100,15 @@ if (!gotLock) {
     });
     mainWindow.loadFile('index.html');
     mainWindow.setMenuBarVisibility(false);
+
+    if (isLinux) {
+      win.on('maximize', () => {
+        if (!win.isDestroyed()) win.webContents.send('window-maximized-changed', true);
+      });
+      win.on('unmaximize', () => {
+        if (!win.isDestroyed()) win.webContents.send('window-maximized-changed', false);
+      });
+    }
   }
 
   ipcMain.handle('get-argv-file', () => {
@@ -211,6 +229,23 @@ if (!gotLock) {
     try { fs.writeFileSync(filePath, content, 'utf-8'); return true; }
     catch { return false; }
   });
+
+  if (isLinux) {
+    ipcMain.on('window-minimize', (event) => {
+      BrowserWindow.fromWebContents(event.sender)?.minimize();
+    });
+    ipcMain.on('window-maximize', (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return;
+      win.isMaximized() ? win.unmaximize() : win.maximize();
+    });
+    ipcMain.on('window-close', (event) => {
+      BrowserWindow.fromWebContents(event.sender)?.close();
+    });
+    ipcMain.handle('window-is-maximized', (event) => {
+      return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
+    });
+  }
 
   app.whenReady().then(createWindow);
   app.on('window-all-closed', () => app.exit(0));

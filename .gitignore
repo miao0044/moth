@@ -8,6 +8,10 @@ release/
 cc.ps1
 codex.ps1
 glm.ps1
+cc.sh
+codex.sh
+glm.sh
+*.ntfs3-reparse-*
 
 # Local credentials and machine-specific environment files
 .env

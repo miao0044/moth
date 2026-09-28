@@ -587,3 +587,34 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .epub-loading::before { animation-duration: 1.5s; }
 }
+
+/* Linux: custom window controls */
+[data-platform="linux"] #tab-bar { padding-right: 0; }
+#window-controls {
+  display: none;
+}
+[data-platform="linux"] #window-controls {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+#window-controls button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  width: 46px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#window-controls button:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+#btn-win-close:hover {
+  background: #c42b1c;
+  color: #fff;
+}

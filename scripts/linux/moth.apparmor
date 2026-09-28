@@ -1,0 +1,14 @@
+abi <abi/5.0>,
+include <tunables/global>
+
+profile moth /home/*/.local/opt/moth/moth flags=(unconfined) {
+  userns,
+  /home/*/.local/opt/moth/moth mr,
+  include if exists <local/moth>
+}
+
+profile moth-dev /home/*/.local/share/moth-build/node_modules/electron/dist/electron flags=(unconfined) {
+  userns,
+  /home/*/.local/share/moth-build/node_modules/electron/dist/electron mr,
+  include if exists <local/moth-dev>
+}

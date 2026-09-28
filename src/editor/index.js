@@ -10,7 +10,7 @@ import { json as legacyJson } from '@codemirror/legacy-modes/mode/javascript';
 import { mothTheme } from './theme.js';
 import { livePreviewPlugin } from './live-preview.js';
 
-const MARKDOWN_EXTS = ['.md', '.markdown', '.txt', ''];
+const MARKDOWN_EXTS = ['.md', '.markdown', '.mkd', '.txt', ''];
 
 function createJsonLineState(indentUnit) {
   return {
@@ -63,7 +63,9 @@ function createEditorView(parent, content, { onChange, fileExt = '' }) {
     ? markdown({ base: markdownLanguage, codeLanguages: languages })
     : normalizedExt === '.jsonl'
       ? jsonLinesLanguage
-      : json();
+      : normalizedExt === '.json'
+        ? json()
+        : [];
 
   const extensions = [
     history(),
