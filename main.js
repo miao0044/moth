@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const fileStore = require('./lib/file-store.cjs');
+const { createSessionStore } = require('./lib/session-store.cjs');
+let sessionStore;
+const getSessionStore = () => sessionStore ||= createSessionStore(app.getPath('userData'));
 
 nativeTheme.themeSource = 'dark';
 app.disableHardwareAcceleration();
@@ -11,7 +15,7 @@ function findFileArg(argv) {
   const args = argv.slice(app.isPackaged ? 1 : 2);
   return args.find(a => {
     if (!a || a.startsWith('-')) return false;
-    try { return fs.statSync(a).isFile(); } catch { return false; }
+    try { return fs.statSync(a).isFile(); } catch (error) { return error.code === 'ENOENT'; }
   });
 }
 
@@ -31,6 +35,8 @@ if (!gotLock) {
     }
     if (file) {
       mainWindow.webContents.send('open-file-path', file);
+    } else {
+      mainWindow.webContents.send('activate-text-workspace');
     }
     if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -98,7 +104,7 @@ if (!gotLock) {
       ipcMain.removeListener('window-close-response', handleWindowCloseResponse);
       if (mainWindow === win) mainWindow = null;
     });
-    mainWindow.loadFile('index.html');
+    mainWindow.loadFile(path.join(__dirname, 'index.html'));
     mainWindow.setMenuBarVisibility(false);
 
     if (isLinux) {
@@ -151,44 +157,53 @@ if (!gotLock) {
     return result.filePath;
   });
 
-  ipcMain.handle('confirm-discard-changes', async (event, details = {}) => {
-    const names = Array.isArray(details.names)
-      ? details.names.filter((name) => typeof name === 'string' && name.trim()).slice(0, 10)
-      : [];
-    const isWindowClose = details.scope === 'window';
-    const count = Math.max(names.length, Number.isFinite(details.count) ? Math.trunc(details.count) : 0);
-    const message = isWindowClose
-      ? `Discard unsaved changes in ${count || 'the open'} ${count === 1 ? 'file' : 'files'}?`
-      : `Discard unsaved changes in "${names[0] || 'this file'}"?`;
-    const detail = isWindowClose && names.length
-      ? names.map((name) => `• ${name}`).join('\n')
-      : 'Changes that have not been saved will be lost.';
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options = {
-      type: 'warning',
+  // App-owned confirmations use the same Lexend typography as the editor shell.
+  ipcMain.handle('confirm-discard-changes', (_event, details = {}) => {
+    const names = Array.isArray(details.names) ? details.names.slice(0, 10) : [];
+    const multiple = details.scope === 'window';
+    return { prompt: {
       title: 'Unsaved changes',
-      message,
-      detail,
-      buttons: ['Keep Editing', 'Discard Changes'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
-    };
-    const result = owner && !owner.isDestroyed()
-      ? await dialog.showMessageBox(owner, options)
-      : await dialog.showMessageBox(options);
-    return result.response === 1;
+      message: multiple ? 'Save before closing?' : 'Save your changes?',
+      detail: names.join('\n'),
+      choices: [
+        { value: 'cancel', label: 'Cancel', icon: 'close' },
+        { value: 'discard', label: 'Discard', icon: 'clear' },
+        { value: 'save', label: multiple ? 'Save All' : 'Save', icon: 'save' }
+      ], defaultValue: 'save', cancelValue: 'cancel'
+    } };
   });
+  ipcMain.handle('confirm-file-conflict', (_event, details = {}) => ({ prompt: {
+    title: 'File changed on disk', message: 'Keep both versions or replace the disk copy?', detail: details.path || '',
+    choices: [
+      { value: 'cancel', label: 'Cancel', icon: 'close' },
+      { value: 'save-as', label: 'Save As', icon: 'save-as' },
+      ...(details.allowReload === false ? [] : [{ value: 'reload', label: 'Reload', icon: 'reload' }]),
+      { value: 'overwrite', label: 'Overwrite', icon: 'save' }
+    ], defaultValue: 'cancel', cancelValue: 'cancel'
+  } }));
+  ipcMain.handle('confirm-reload', (_event, filePath) => ({ prompt: {
+    title: 'Reload file', message: 'Discard your edits and reload?', detail: filePath || '',
+    choices: [{ value: false, label: 'Cancel', icon: 'close' }, { value: true, label: 'Reload', icon: 'reload' }],
+    defaultValue: false, cancelValue: false
+  } }));
+  ipcMain.handle('confirm-overwrite', (_event, filePath) => ({ prompt: {
+    title: 'Replace file', message: 'Replace the existing file?', detail: filePath || '',
+    choices: [{ value: false, label: 'Cancel', icon: 'close' }, { value: true, label: 'Replace', icon: 'save' }],
+    defaultValue: false, cancelValue: false
+  } }));
 
-  ipcMain.handle('rename-file', (_, oldPath, newPath) => {
-    try { fs.renameSync(oldPath, newPath); return true; }
-    catch { return false; }
+  ipcMain.handle('rename-file', (_, oldPath, newPath, options) => fileStore.renameFile(oldPath, newPath, options));
+  ipcMain.handle('file-status', (_, filePath) => fileStore.inspectFile(filePath));
+  ipcMain.handle('read-session', () => getSessionStore().read());
+  ipcMain.handle('write-session', (_, snapshot, options) => getSessionStore().write(snapshot, options));
+  ipcMain.on('write-session-sync', (event, snapshot) => {
+    event.returnValue = getSessionStore().write(snapshot);
   });
 
   ipcMain.handle('read-dir', (_, dirPath) => {
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-      return entries
+      const children = entries
         .filter(e => !e.name.startsWith('.'))
         .map(e => ({
           name: e.name,
@@ -200,13 +215,11 @@ if (!gotLock) {
           if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
           return a.name.localeCompare(b.name);
         });
-    } catch { return []; }
+      return { ok: true, entries: children };
+    } catch (error) { return { ok: false, code: error.code, message: error.message }; }
   });
 
-  ipcMain.handle('read-file', (_, filePath) => {
-    try { return fs.readFileSync(filePath, 'utf-8'); }
-    catch { return null; }
-  });
+  ipcMain.handle('read-file', (_, filePath) => fileStore.readText(filePath));
 
   ipcMain.handle('read-epub', async (_, filePath) => {
     try {
@@ -225,10 +238,7 @@ if (!gotLock) {
     }
   });
 
-  ipcMain.handle('write-file', (_, filePath, content) => {
-    try { fs.writeFileSync(filePath, content, 'utf-8'); return true; }
-    catch { return false; }
-  });
+  ipcMain.handle('write-file', (_, filePath, content, options) => fileStore.writeText(filePath, content, options));
 
   if (isLinux) {
     ipcMain.on('window-minimize', (event) => {

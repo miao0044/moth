@@ -1,6 +1,6 @@
 # Moth
 
-Moth is a dark, minimal Windows editor and EPUB reader built with Electron, CodeMirror 6, and vanilla JavaScript. This file is project guidance for coding agents and should stay in the repository root.
+Moth is a dark, minimal desktop editor and EPUB reader built with Electron, CodeMirror 6, and vanilla JavaScript. This file is project guidance for coding agents and should stay in the repository root.
 
 ## Architecture
 
@@ -8,6 +8,9 @@ Moth uses Electron's two-process model with no framework and no TypeScript.
 
 - `main.js` — Electron main process: window lifecycle, single-instance handling, text/binary file I/O, rename IPC, and system dialogs
 - `renderer.js` — renderer process: tabs, text editor and EPUB surface lifecycles, settings, sidebar, and keyboard shortcuts
+- `lib/file-store.cjs` — version checks, atomic saves, alias identity, no-clobber rename
+- `lib/session-store.cjs` — private primary/backup recovery snapshots and explicit discard sanitation
+- `lib/file-controls.cjs` — compact icon commands, history menu, notices, and Lexend confirmation dialogs
 - `index.html` / `style.css` — application shell and theming through CSS variables
 - `src/editor/` — CodeMirror 6 editor source
   - `index.js` — exports `createEditorView`, `destroyEditorView`, and `openSearch`; selects Markdown, JSON, or JSONL language mode
@@ -31,7 +34,7 @@ npm start      # rebuild and run the development app
 npm run dist   # regenerate icons, rebuild, and package release/win-unpacked/Moth.exe
 ```
 
-The user runs the portable build at `release/win-unpacked/Moth.exe`, not the development process. After changing `main.js`, `renderer.js`, `index.html`, `style.css`, `src/editor/*`, `src/epub/*`, or `src/fonts/*`, run `npm run qa` and then `npm run dist`. Source edits alone are not visible in the portable app.
+On this Linux workstation the user runs `~/.local/bin/moth` → `~/.local/opt/moth/moth` → `resources/app.asar`. Build with `npm run dist:linux`, preserve open documents, close normally, then install the rebuilt archive. Source edits alone do not update the installed app. The Windows portable build remains at `release/win-unpacked/Moth.exe`. After changing `main.js`, `renderer.js`, `index.html`, `style.css`, `src/editor/*`, `src/epub/*`, or `src/fonts/*`, run `npm run qa` and then the platform package command (`npm run dist:linux` on this workstation; `npm run dist` for Windows). Source edits alone are not visible in the portable app.
 
 If `Moth.exe` is running, close it normally before `npm run dist`; Windows will otherwise lock the release directory. Never force-kill it without first ruling out unsaved text tabs.
 
@@ -74,7 +77,11 @@ All handlers point to `release/win-unpacked/Moth.exe`. Use `npm run register-ass
 
 ## Reliability constraints
 
-- Dirty text tabs require confirmation before tab or window close.
+- Dirty text tabs require Save / Discard / Cancel before tab or window close. Failed or canceled saves keep the tab open.
+- Recovery snapshots never write original files. Explicit discard must sanitize both snapshots (`discardPrevious`), and final close must prevent or retain edits made during persistence.
+- Saves and renames of an open file carry its original disk version. Never adopt an external disk version merely by renaming the file.
+- Save As may not replace a destination already open through another path or alias.
+- Keep controls compact and icon-first; use bundled Lexend for necessary app-owned text. Native OS file choosers keep OS styling.
 - Save operations must mark only the exact written snapshot as saved; edits made while a write is pending stay dirty.
 - Renames may change language modes among text formats, but must not silently convert between text and EPUB surfaces.
 - EPUB resize, navigation, settings, and relocated events are serialized/coalesced so stale events cannot move the reader back to an earlier chapter.
@@ -89,3 +96,7 @@ All handlers point to `release/win-unpacked/Moth.exe`. Use `npm run register-ass
 - `Ctrl+O` — Open file
 - `Ctrl+W` — Close tab
 - `Ctrl+B` — Toggle sidebar
+
+- `Ctrl+Shift+S` — Save As
+- `Ctrl+Alt+S` — Save All
+- `Ctrl+Shift+T` — Reopen Closed Tab

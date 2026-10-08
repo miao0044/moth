@@ -7,7 +7,7 @@
   "scripts": {
     "icons": "node build/generate-icon.js",
     "build": "node esbuild.config.mjs",
-    "qa": "node esbuild.config.mjs && electron scripts/qa-electron.cjs",
+    "qa": "node esbuild.config.mjs && node scripts/qa-storage.cjs && electron scripts/qa-electron.cjs && electron scripts/qa-features.cjs && electron scripts/qa-epub-close.cjs",
     "start": "node esbuild.config.mjs && electron .",
     "dist": "npm run icons && node esbuild.config.mjs && electron-builder --win",
     "dist:linux": "npm run icons && node esbuild.config.mjs && electron-builder --linux",
@@ -41,6 +41,7 @@
     "files": [
       "main.js",
       "renderer.js",
+      "lib/**/*.cjs",
       "index.html",
       "style.css",
       "THIRD_PARTY_NOTICES.md",

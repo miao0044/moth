@@ -293,23 +293,6 @@ function nextAnimationFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
-function waitForBookOpen(book) {
-  return new Promise((resolve, reject) => {
-    const failed = (cause) => {
-      book.off('openFailed', failed);
-      reject(new EpubViewError('EPUB_INVALID', 'The EPUB archive could not be opened.', cause));
-    };
-    book.on('openFailed', failed);
-    book.opened.then(
-      (value) => {
-        book.off('openFailed', failed);
-        resolve(value);
-      },
-      failed,
-    );
-  });
-}
-
 async function displayInitialSection(rendition, target) {
   let renderedHandler;
   let errorHandler;
@@ -426,6 +409,7 @@ function createEpubView(parent, data, options = {}) {
 
   let phase = 'loading';
   let book = null;
+  let bookOpenSettled = Promise.resolve();
   let rendition = null;
   let metadata = null;
   let toc = [];
@@ -1194,6 +1178,24 @@ function createEpubView(parent, data, options = {}) {
     return controller;
   }
 
+  function releaseBook() {
+    const closingBook = book;
+    const closingRendition = rendition;
+    book = null;
+    rendition = null;
+    // EPUB.js leaves navigation/display-option/resource work running after
+    // open(). Destroying sooner clears `loading` under those callbacks. Keep
+    // only the captured library objects alive until that work has settled.
+    void bookOpenSettled.then(() => {
+      try {
+        if (closingBook) closingBook.destroy();
+        else if (closingRendition) closingRendition.destroy();
+      } catch {
+        // Partial or malformed EPUB.js books may not fully destroy.
+      }
+    });
+  }
+
   function destroy() {
     if (phase === 'destroyed') return;
     const wasLoading = phase === 'loading';
@@ -1220,14 +1222,7 @@ function createEpubView(parent, data, options = {}) {
     if (rendition && contentHook) rendition.hooks.content.deregister(contentHook);
     settleSettingsWaiters(Infinity, new EpubViewError('EPUB_DESTROYED', 'The EPUB reader has been destroyed.'));
 
-    try {
-      if (book) book.destroy();
-      else if (rendition) rendition.destroy();
-    } catch {
-      // Destruction must remain idempotent even after a partial EPUB.js open.
-    }
-    book = null;
-    rendition = null;
+    releaseBook();
     dom.root.remove();
     dom.root.replaceChildren();
     if (wasLoading) rejectReady(new EpubViewError('EPUB_DESTROYED', 'The EPUB reader was closed while loading.'));
@@ -1262,8 +1257,15 @@ function createEpubView(parent, data, options = {}) {
       if (phase === 'destroyed') return;
       // ArrayBuffer input must be auto-detected as "binary". Forcing `openAs:
       // "epub"` makes EPUB.js treat the buffer as a URL and request it.
-      book = ePub(buffer);
-      await waitForBookOpen(book);
+      book = ePub();
+      const opened = book.opened;
+      const loaded = book.ready;
+      // Observe open() itself: for a malformed archive it rejects while
+      // EPUB.js's opened/ready promises can remain pending forever. Only a
+      // successful open attempt should wait for those remaining load tasks.
+      const opening = book.open(buffer).then(() => Promise.all([opened, loaded]));
+      bookOpenSettled = opening.then(() => {}, () => {});
+      await opening;
       if (phase === 'destroyed') return;
 
       const [loadedMetadata, spine, navigation, displayOptions] = await Promise.all([
@@ -1279,6 +1281,7 @@ function createEpubView(parent, data, options = {}) {
       if (await hasUnsupportedEncryption(book)) {
         throw new EpubViewError('EPUB_DRM', 'Unsupported EPUB encryption detected.');
       }
+      if (phase === 'destroyed') return;
 
       metadata = { ...loadedMetadata };
       toc = copyToc(navigation?.toc || []);
@@ -1362,9 +1365,7 @@ function createEpubView(parent, data, options = {}) {
       const error = emitError(input, true);
       phase = 'error';
       showError(dom.state, error);
-      try { book?.destroy(); } catch { /* Partial EPUB.js books may not fully destroy. */ }
-      book = null;
-      rendition = null;
+      releaseBook();
       rejectReady(error);
     }
   })();

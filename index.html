@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html style="background:#262626">
+<html lang="en" style="background:#262626">
 <head>
   <meta charset="UTF-8">
   <title>Moth</title>
@@ -11,9 +11,8 @@
     <div id="sidebar" class="collapsed">
       <div id="file-sidebar" class="sidebar-pane">
         <div id="sidebar-header">
-          <button id="btn-open-folder" title="Open Folder"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4.5h4l1.5 1.5H14v7H2V4.5z"/></svg></button>
-          <button id="btn-open-file" title="Open File"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 2h5L13 5.5V14H4.5V2z"/><path d="M9.5 2v4H13"/></svg></button>
-          <button id="btn-search" title="Find & Replace (Ctrl+H)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4"/><path d="M10 10l3.5 3.5"/></svg></button>
+          <button id="btn-file-menu" type="button" aria-label="File menu" title="File menu" aria-haspopup="menu" aria-controls="file-menu" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v7H2V4.5z"/></svg></button>
+          <button id="btn-search" type="button" aria-label="Find and Replace" title="Find & Replace (Ctrl+H)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6.5" cy="6.5" r="4"/><path d="M10 10l3.5 3.5"/></svg></button>
           <span id="folder-name">No folder open</span>
         </div>
         <div id="file-tree"></div>
@@ -36,16 +35,18 @@
     <div id="sidebar-resize"></div>
     <div id="main">
       <div id="tab-bar">
-        <button id="btn-toggle-sidebar" title="Toggle Sidebar (Ctrl+B)">☰</button>
+        <button id="btn-toggle-sidebar" type="button" aria-label="Toggle Sidebar" title="Toggle Sidebar (Ctrl+B)">☰</button>
         <div id="tabs"></div>
-        <button id="btn-new-file" title="New File (Ctrl+N)">+</button>
+        <button id="btn-new-file" type="button" aria-label="New File" title="New File (Ctrl+N)">+</button>
         <div id="tab-bar-spacer"></div>
-        <button id="btn-settings" title="Settings">⚙</button>
+        <button id="btn-save" type="button" aria-label="Save" title="Save (Ctrl+S)" disabled><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2.5 2h9l2 2V14h-11V2z"/><path d="M5 2v4h6V2M5 14V9h6v5"/></svg></button>
+        <button id="btn-settings" type="button" aria-label="Settings" title="Settings">⚙</button>
       </div>
+      <div id="file-menu" role="menu" aria-label="File" hidden></div>
       <div id="settings-panel">
         <h3>Settings</h3>
         <div class="setting-row">
-          <label>Font</label>
+          <label for="setting-font">Font</label>
           <select id="setting-font">
             <option value="serif">Serif</option>
             <option value="Georgia, serif">Georgia</option>
@@ -60,21 +61,22 @@
           </select>
         </div>
         <div class="setting-row">
-          <label>Size</label>
+          <label for="setting-font-size">Size</label>
           <input type="range" id="setting-font-size" min="12" max="24" value="16">
           <span class="range-val" id="font-size-val">16px</span>
         </div>
         <div class="setting-row">
-          <label>Padding</label>
+          <label for="setting-padding">Padding</label>
           <input type="range" id="setting-padding" min="20" max="300" value="50">
           <span class="range-val" id="padding-val">50px</span>
         </div>
         <div class="setting-row">
-          <label>Spacing</label>
+          <label for="setting-spacing">Spacing</label>
           <input type="range" id="setting-spacing" min="60" max="200" step="5" value="100">
           <span class="range-val" id="spacing-val">100%</span>
         </div>
       </div>
+      <div id="document-notice" hidden></div>
       <div id="content">
         <div id="welcome">
           <h2>Moth</h2>
@@ -87,6 +89,12 @@
     <span id="status-path"></span>
     <span id="status-stats"></span>
   </div>
+  <dialog id="file-confirm" aria-labelledby="file-confirm-title" aria-describedby="file-confirm-message file-confirm-detail">
+    <h2 id="file-confirm-title"></h2>
+    <p id="file-confirm-message"></p>
+    <p id="file-confirm-detail" hidden></p>
+    <div id="file-confirm-actions"></div>
+  </dialog>
   <script src="renderer.js"></script>
 </body>
 </html>

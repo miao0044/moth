@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
@@ -54,15 +54,42 @@ async function makeEpub(fixedLayout = false) {
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-function registerIpc(epubBuffer, fixedEpubBuffer) {
+function registerIpc(epubBuffer, fixedEpubBuffer, appRoot) {
   const writes = [];
   let pendingWrite = null;
+  const control = {
+    writes,
+    diskRoot: fs.mkdtempSync(path.join(app.getPath('temp'), 'moth-shortcuts-qa-')),
+    openPath: null,
+    savePath: null
+  };
+  const fileStore = require(path.join(appRoot, 'lib/file-store.cjs'));
+  const virtualFiles = new Map();
+  const virtualFile = (filePath) => {
+    if (!virtualFiles.has(filePath)) virtualFiles.set(filePath, {
+      ok: true,
+      content: path.extname(filePath).toLowerCase() === '.jsonl'
+        ? '{"first":1}\n{"second":[true,false]}' : '# QA\n',
+      version: 'fixture-1', identity: filePath, realPath: filePath
+    });
+    return virtualFiles.get(filePath);
+  };
+  const isDiskPath = (filePath) => filePath.startsWith(control.diskRoot + path.sep);
+  let session = null;
 
   ipcMain.handle('get-argv-file', () => null);
-  ipcMain.handle('read-dir', () => []);
-  ipcMain.handle('read-file', (_event, filePath) => path.extname(filePath).toLowerCase() === '.jsonl'
-    ? '{"first":1}\n{"second":[true,false]}'
-    : '# QA\n');
+  ipcMain.handle('read-dir', () => ({ ok: true, entries: [] }));
+  ipcMain.handle('read-file', (_event, filePath) => isDiskPath(filePath)
+    ? fileStore.readText(filePath) : virtualFile(filePath));
+  ipcMain.handle('file-status', (_event, filePath) => isDiskPath(filePath)
+    ? fileStore.inspectFile(filePath) : { ...virtualFile(filePath), exists: true });
+  ipcMain.handle('read-session', () => ({ ok: true, session }));
+  ipcMain.handle('write-session', (_event, snapshot, _options) => { session = snapshot; return { ok: true }; });
+  ipcMain.on('write-session-sync', (event, snapshot, _options) => { session = snapshot; event.returnValue = { ok: true }; });
+  ipcMain.handle('confirm-discard-changes', () => 'cancel');
+  ipcMain.handle('confirm-file-conflict', () => 'overwrite');
+  ipcMain.handle('confirm-reload', () => false);
+  ipcMain.handle('confirm-overwrite', () => true);
   ipcMain.handle('read-epub', (_event, filePath) => {
     const data = filePath.includes('fixed-layout') ? fixedEpubBuffer : epubBuffer;
     return {
@@ -73,16 +100,23 @@ function registerIpc(epubBuffer, fixedEpubBuffer) {
     };
   });
   ipcMain.handle('open-folder', () => null);
-  ipcMain.handle('open-file-dialog', () => null);
-  ipcMain.handle('save-file-dialog', () => null);
-  ipcMain.handle('rename-file', () => false);
+  ipcMain.handle('open-file-dialog', () => control.openPath);
+  ipcMain.handle('save-file-dialog', () => control.savePath);
+  ipcMain.handle('rename-file', () => ({ ok: false, code: 'QA_CANCEL', message: 'Rename canceled' }));
   ipcMain.handle('window-is-maximized', () => false);
-  ipcMain.handle('write-file', (_event, filePath, content) => {
+  ipcMain.handle('write-file', (_event, filePath, content, options) => {
     const record = { filePath, content, completed: false };
     writes.push(record);
+    if (isDiskPath(filePath)) {
+      record.result = fileStore.writeText(filePath, content, options);
+      record.completed = true;
+      return record.result;
+    }
     if (!filePath.includes('save-race')) {
       record.completed = true;
-      return true;
+      const result = { ...virtualFile(filePath), content, version: `fixture-${writes.length + 1}` };
+      virtualFiles.set(filePath, result);
+      return result;
     }
 
     return new Promise((resolve) => {
@@ -98,9 +132,12 @@ function registerIpc(epubBuffer, fixedEpubBuffer) {
     const write = pendingWrite;
     pendingWrite = null;
     write.record.completed = true;
-    write.resolve(true);
+    const result = { ...virtualFile(write.record.filePath), content: write.record.content, version: `fixture-${writes.length + 1}` };
+    virtualFiles.set(write.record.filePath, result);
+    write.resolve(result);
     return true;
   });
+  return control;
 }
 
 async function waitForRenderer(window, expression, predicate, label, timeout = 15000) {
@@ -129,13 +166,294 @@ function closeNumber(actual, expected, tolerance = 0.25) {
   return Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance;
 }
 
+async function textScrollRegressions(window, io) {
+  const run = (code) => window.webContents.executeJavaScript(code, true);
+  const settle = () => run('new Promise(resolve => setTimeout(resolve, 300))');
+  const fixtures = {
+    markdown: ['scroll-markdown.md', Array.from({ length: 180 }, (_, i) =>
+      `## Section ${i}\n\nA **Markdown** paragraph with enough words to wrap and preserve a reading position. `.repeat(2)
+      + `\n\n- First item ${i}\n- Second item ${i}\n\n`).join('')],
+    plain: ['scroll-plain.txt', Array.from({ length: 1200 }, (_, i) =>
+      `Plain line ${i}: Keep this reading position even when the cursor remains at the beginning.`).join('\n')],
+    json: ['scroll-json.json', JSON.stringify(Array.from({ length: 500 }, (_, i) =>
+      ({ index: i, text: 'JSON reading position separate from both other files' })), null, 2)]
+  };
+  const ids = {};
+  const positions = [];
+  const sample = () => run(`(() => {
+    const tab = activeTab(), view = tab.editorView;
+    return { name: tab.name, top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft,
+      anchor: view.state.selection.main.anchor, head: view.state.selection.main.head,
+      focused: view.hasFocus, contentFocus: view.contentDOM.contains(document.activeElement),
+      connected: view.dom.isConnected };
+  })()`);
+  const clickTab = async (id) => {
+    const point = await run(`(() => {
+      const tab = document.querySelector('.tab[data-id="${id}"]');
+      tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const rect = tab.querySelector('.tab-title').getBoundingClientRect();
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+    })()`);
+    window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 });
+    window.webContents.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 });
+    await waitForRenderer(window, 'activeTab().id', (activeId) => activeId === id, 'scroll tab click');
+  };
+  const place = async (top) => {
+    await run(`(() => {
+      const view = activeTab().editorView;
+      view.dispatch({ selection: { anchor: 0, head: 0 } });
+      view.scrollDOM.scrollTop = ${top};
+    })()`);
+    await settle();
+    const value = await sample();
+    if (value.top < 500 || value.anchor !== 0 || value.head !== 0) {
+      throw new Error('Invalid scroll regression fixture: ' + JSON.stringify(value));
+    }
+    return value;
+  };
+  const verifyReturn = async (name, expected) => {
+    await clickTab(ids[name]);
+    const immediate = await sample();
+    await settle();
+    const settled = await sample();
+    positions.push({ expected, immediate, settled });
+    return closeNumber(immediate.top, expected.top, 2)
+      && closeNumber(settled.top, expected.top, 2)
+      && closeNumber(settled.left, expected.left, 2)
+      && settled.anchor === 0 && settled.head === 0 && settled.contentFocus && settled.connected;
+  };
+
+  window.focus();
+  window.webContents.focus();
+  for (const [name, [filename, content]] of Object.entries(fixtures)) {
+    const filenamePath = path.join(io.diskRoot, filename);
+    fs.writeFileSync(filenamePath, content);
+    ids[name] = await run(`(async () => { await openFile(${JSON.stringify(filenamePath)}); return activeTab().id; })()`);
+    await settle();
+  }
+  await clickTab(ids.markdown);
+  const markdown = await place(1600);
+  await clickTab(ids.plain);
+  const plain = await place(2600);
+  const checks = {};
+  checks.markdownScrollRestored = await verifyReturn('markdown', markdown);
+  checks.plainScrollRestored = await verifyReturn('plain', plain);
+  await clickTab(ids.json);
+  const json = await place(3600);
+  checks.markdownScrollSurvivesRepeatedSwitch = await verifyReturn('markdown', markdown);
+  checks.jsonScrollRestored = await verifyReturn('json', json);
+  checks.plainScrollSurvivesRepeatedSwitch = await verifyReturn('plain', plain);
+
+  // Several activations in one renderer turn expose stale deferred restorations.
+  // The last real scroll before leaving a tab must be the one retained.
+  await clickTab(ids.markdown);
+  const latestMarkdown = await place(4700);
+  checks.activeTabClickKeepsRecentScroll = await verifyReturn('markdown', latestMarkdown);
+  await run(`(() => {
+    for (const id of ${JSON.stringify([ids.plain, ids.markdown, ids.json, ids.markdown, ids.plain, ids.markdown])}) {
+      document.querySelector('.tab[data-id="' + id + '"]').click();
+    }
+  })()`);
+  await settle();
+  const rapid = await sample();
+  positions.push({ expected: latestMarkdown, settled: rapid, rapid: true });
+  checks.rapidSwitchKeepsLatestScroll = closeNumber(rapid.top, latestMarkdown.top, 2)
+    && rapid.anchor === 0 && rapid.head === 0 && rapid.contentFocus;
+  const rapidPlain = await verifyReturn('plain', plain);
+  const rapidJson = await verifyReturn('json', json);
+  checks.rapidSwitchKeepsOtherTabs = rapidPlain && rapidJson;
+
+  for (const id of Object.values(ids)) await run(`closeTab(${JSON.stringify(id)})`);
+  return { checks, positions };
+}
+
+async function keyboardRegressions(window, io) {
+  const run = (code) => window.webContents.executeJavaScript(code, true);
+  const wait = (code, predicate, label) => waitForRenderer(window, code, predicate, label);
+  const press = async (keyCode, modifiers = ['control']) => {
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+    await run('new Promise(resolve => requestAnimationFrame(resolve))');
+  };
+  const click = async (selector, button = 'left') => {
+    const point = await run(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      const rect = element.getBoundingClientRect();
+      let left = rect.left, right = rect.right, top = rect.top, bottom = rect.bottom;
+      for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+        const bounds = parent.getBoundingClientRect();
+        const style = getComputedStyle(parent);
+        if (style.overflowX !== 'visible') { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+        if (style.overflowY !== 'visible') { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+      }
+      if (right <= left || bottom <= top) throw new Error('QA click target is not visible');
+      return { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) };
+    })()`);
+    window.webContents.sendInputEvent({ type: 'mouseDown', ...point, button, clickCount: 1 });
+    window.webContents.sendInputEvent({ type: 'mouseUp', ...point, button, clickCount: 1 });
+    await run('new Promise(resolve => requestAnimationFrame(resolve))');
+  };
+  const savedClipboard = {
+    text: clipboard.readText(), html: clipboard.readHTML(), rtf: clipboard.readRTF(), image: clipboard.readImage()
+  };
+  const report = {};
+  const longContent = Array.from({ length: 1400 }, (_, i) => `Line ${i}: Long document clipboard regression with words outside the visible viewport.`).join('\n');
+  const longPath = path.join(io.diskRoot, 'long-document.txt');
+  fs.writeFileSync(longPath, longContent);
+
+  const selectCopyPaste = async (label, expected) => {
+    await press('A');
+    await wait('activeTab().editorView.state.selection.main.to - activeTab().editorView.state.selection.main.from', value => value === expected.length, `${label} single Ctrl+A`);
+    clipboard.writeText('clipboard sentinel');
+    await press('C');
+    await wait('require("electron").clipboard.readText()', value => value === expected, `${label} single Ctrl+C`);
+    clipboard.writeText(`${label} pasted once`);
+    await press('V');
+    await wait('activeTab().content', value => value === `${label} pasted once`, `${label} single Ctrl+V`);
+    return true;
+  };
+
+  window.focus();
+  window.webContents.focus();
+  try {
+    io.openPath = longPath;
+    await press('O');
+    await wait('activeTab()?.path', value => value === longPath, 'Ctrl+O opens the selected file');
+    report.openFocus = await run('activeTab().editorView.hasFocus');
+    report.longDocumentLength = longContent.length;
+    report.openClipboard = await selectCopyPaste('open', longContent);
+    const beforeSave = io.writes.length;
+    await press('S');
+    await wait('activeTab().dirty', value => value === false, 'single Ctrl+S completes');
+    report.saveShortcut = io.writes.length === beforeSave + 1
+      && fs.readFileSync(longPath, 'utf8') === 'open pasted once';
+    await press('Z');
+    await wait('activeTab().content', value => value === longContent, 'undo restores the long document');
+    await press('S');
+    await wait('activeTab().dirty', value => value === false, 'save restored long document');
+
+    await press('N');
+    await wait('activeTab()?.path === null && activeTab().editorView.hasFocus', Boolean, 'new tab focuses its editor');
+    report.newFocus = true;
+    clipboard.writeText(longContent);
+    await press('V');
+    await wait('activeTab().content.length', value => value === longContent.length, 'new tab single paste');
+    report.newClipboard = await selectCopyPaste('new', longContent);
+
+    const longTabId = await run(`state.tabs.find(tab => tab.path === ${JSON.stringify(longPath)}).id`);
+    await run(`document.querySelector('.tab[data-id="${longTabId}"]').scrollIntoView({ inline: 'nearest' })`);
+    await click(`.tab[data-id="${longTabId}"] .tab-title`);
+    await wait('activeTab().editorView.hasFocus', Boolean, 'clicked tab restores editor focus');
+    report.switchFocus = true;
+    report.switchClipboard = await selectCopyPaste('switch', longContent);
+
+    // Search owns normal text-editing shortcuts while its input is focused.
+    await press('F');
+    await wait('document.activeElement?.matches(".cm-search input")', Boolean, 'find input has focus');
+    await window.webContents.insertText('search query');
+    await run('activateTab(activeTab().id)');
+    report.searchFocusRetained = await run('document.activeElement?.matches(".cm-search input")');
+    await press('A');
+    await press('C');
+    await wait('require("electron").clipboard.readText()', value => value === 'search query', 'search Ctrl+A/C');
+    clipboard.writeText('replacement query');
+    await press('V');
+    await wait('document.activeElement.value', value => value === 'replacement query', 'search Ctrl+V');
+    report.searchClipboard = await run('activeTab().content === "switch pasted once"');
+    await press('Escape', []);
+
+    await click(`.tab[data-id="${longTabId}"] .tab-title`, 'right');
+    await wait('document.activeElement?.matches(".rename-input")', Boolean, 'rename input has focus');
+    await click('.rename-input');
+    report.renameClickFocus = await run('document.activeElement?.matches(".rename-input")');
+    await press('A');
+    await press('C');
+    await wait('require("electron").clipboard.readText()', value => value === 'long-document.txt', 'rename Ctrl+A/C');
+    clipboard.writeText('renamed.txt');
+    await press('V');
+    await wait('document.activeElement.value', value => value === 'renamed.txt', 'rename Ctrl+V');
+    report.renameClipboard = await run('activeTab().content === "switch pasted once"');
+    await press('Escape', []);
+
+    // Save fails against a genuinely removed parent, then Save As recovers it.
+    const missingFolder = path.join(io.diskRoot, 'removed-folder');
+    const lostPath = path.join(missingFolder, 'recover.txt');
+    fs.mkdirSync(missingFolder);
+    fs.writeFileSync(lostPath, 'saved before folder removal');
+    io.openPath = lostPath;
+    await press('O');
+    await wait('activeTab()?.path', value => value === lostPath, 'open file before parent removal');
+    await press('A');
+    clipboard.writeText('unsaved recovery text');
+    await press('V');
+    await wait('activeTab().content', value => value === 'unsaved recovery text', 'recovery edit');
+    fs.rmSync(missingFolder, { recursive: true });
+    await press('S');
+    await wait('document.querySelector("#document-notice").textContent', value => value.includes(lostPath) && value.includes('ENOENT'), 'missing directory save is reported');
+    const failure = io.writes[io.writes.length - 1];
+    report.writeErrorStructured = failure.result?.ok === false
+      && failure.result?.code === 'ENOENT' && typeof failure.result?.message === 'string';
+    report.failedSaveRetained = await run(`activeTab().dirty && activeTab().path === ${JSON.stringify(lostPath)}
+      && activeTab().savedContent === 'saved before folder removal' && activeTab().content === 'unsaved recovery text'`);
+    report.missingDirectoryNotCreated = !fs.existsSync(missingFolder);
+    report.saveFailureActionable = await run(`(() => {
+      const notice = document.querySelector('#document-notice');
+      return !notice.hidden && notice.textContent.includes(${JSON.stringify(lostPath)})
+        && notice.textContent.includes('Save As') && notice.textContent.includes('folder');
+    })()`);
+
+    io.savePath = path.join(io.diskRoot, 'another-missing-folder', 'failed-save-as.txt');
+    await press('S', ['control', 'shift']);
+    await wait('document.querySelector("#document-notice").textContent', value => value.includes(io.savePath) && value.includes('ENOENT'), 'failed Save As is reported');
+    report.failedSaveAsRetained = await run(`activeTab().dirty && activeTab().path === ${JSON.stringify(lostPath)}
+      && activeTab().savedContent === 'saved before folder removal'`);
+    io.savePath = path.join(io.diskRoot, 'recovered.txt');
+    await press('S', ['control', 'shift']);
+    await wait('activeTab().dirty', value => value === false, 'Save As recovers failed save');
+    report.saveAsRecovery = await run(`activeTab().path === ${JSON.stringify(io.savePath)} && activeTab().savedContent === 'unsaved recovery text'`)
+      && fs.readFileSync(io.savePath, 'utf8') === 'unsaved recovery text';
+
+    // Native input above proves the normal shortcuts; synthetic events cover
+    // DOM-only IME metadata and ensure composition/AltGr is never intercepted.
+    report.imeGuards = await run(`(() => {
+      const before = state.tabs.length;
+      for (const options of [{ altKey: true }, { isComposing: true }, { keyCode: 229 }]) {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Process', code: 'KeyN', ctrlKey: true, bubbles: true, cancelable: true, ...options }));
+      }
+      return state.tabs.length === before;
+    })()`);
+    report.physicalKeyFallback = await run(`(() => {
+      const before = state.tabs.length;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Unidentified', code: 'KeyN', ctrlKey: true, bubbles: true, cancelable: true }));
+      return state.tabs.length === before + 1 && activeTab().editorView.hasFocus;
+    })()`);
+
+    // A failed first save must keep an untitled tab untitled and dirty too.
+    await window.webContents.insertText('new unsaved document');
+    io.savePath = path.join(io.diskRoot, 'missing-new-parent', 'new.txt');
+    await press('S');
+    await wait('document.querySelector("#document-notice").textContent', value => value.includes(io.savePath) && value.includes('ENOENT'), 'untitled save failure is reported');
+    report.failedFirstSaveRetained = await run('activeTab().path === null && activeTab().dirty && activeTab().savedContent === ""');
+    io.savePath = path.join(io.diskRoot, 'new-recovered.txt');
+    await press('S');
+    await wait('activeTab().dirty', value => value === false, 'untitled save recovery');
+    report.firstSaveRecovery = fs.readFileSync(io.savePath, 'utf8') === 'new unsaved document';
+    return report;
+  } finally {
+    clipboard.write(savedClipboard);
+    io.openPath = null;
+    io.savePath = null;
+    fs.rmSync(io.diskRoot, { recursive: true, force: true });
+  }
+}
+
 async function run() {
   const [epub, fixedEpub] = await Promise.all([makeEpub(), makeEpub(true)]);
-  registerIpc(epub, fixedEpub);
   const fixturePath = path.join(app.getPath('temp'), 'moth-reader-qa.epub');
   const appRoot = process.env.MOTH_QA_APP_ROOT
     ? path.resolve(process.env.MOTH_QA_APP_ROOT)
     : path.join(__dirname, '..');
+  const io = registerIpc(epub, fixedEpub, appRoot);
   fs.writeFileSync(fixturePath, epub);
 
   const window = new BrowserWindow({
@@ -146,6 +464,19 @@ async function run() {
     webPreferences: { nodeIntegration: true, contextIsolation: false }
   });
   await window.loadFile(path.join(appRoot, 'index.html'));
+  await window.webContents.executeJavaScript('window.workspaceReady', true);
+  // Startup now provides an editable blank document; the legacy layout fixtures
+  // explicitly create their own first tab for width measurements.
+  await window.webContents.executeJavaScript('(async () => { for (const tab of [...state.tabs]) { if (!tab.path && !tab.dirty && !tab.content) await closeTab(tab.id); } })()', true);
+
+  if (process.env.MOTH_QA_SCROLL_ONLY === '1') {
+    const scroll = await textScrollRegressions(window, io);
+    console.log(JSON.stringify({ textScroll: scroll }, null, 2));
+    window.destroy();
+    fs.rmSync(io.diskRoot, { recursive: true, force: true });
+    if (Object.values(scroll.checks).some(value => !value)) throw new Error('Text scroll regression failed');
+    return;
+  }
 
   const report = await window.webContents.executeJavaScript(`(async () => {
     const QA_ROOT = ${JSON.stringify(QA_ROOT)};
@@ -230,14 +561,14 @@ async function run() {
     try {
       confirmDiscardChanges = async () => {
         discardPromptCalls += 1;
-        return false;
+        return 'cancel';
       };
       cancelledCloseResult = await closeTab(dirtyCloseTab.id);
       retainedAfterCancel = isOpenTab(dirtyCloseTab) && state.tabs.includes(dirtyCloseTab);
 
       confirmDiscardChanges = async () => {
         discardPromptCalls += 1;
-        return true;
+        return 'discard';
       };
       confirmedCloseResult = await closeTab(dirtyCloseTab.id);
       removedAfterConfirm = !isOpenTab(dirtyCloseTab) && !state.tabs.includes(dirtyCloseTab);
@@ -856,8 +1187,13 @@ async function run() {
     'reader position after resize'
   );
   report.readerPositionAfterResize = report.readerPosition.positioned;
+  report.textScroll = await textScrollRegressions(window, io);
+  report.keyboard = await keyboardRegressions(window, io);
 
   const checks = {
+    ...report.textScroll.checks,
+    nativeKeyboardRegressions: Object.entries(report.keyboard)
+      .filter(([name]) => name !== 'longDocumentLength').every(([, value]) => value === true),
     smallTabsNatural: report.smallTabLayout.widths.length === 2
       && report.smallTabLayout.firstWidthStable
       && report.smallTabLayout.noOverflow
